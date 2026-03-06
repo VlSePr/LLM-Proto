@@ -1,0 +1,12 @@
+# Medium model config — 350M parameters
+
+vocab_size: 32000
+dim: 1024
+n_layers: 24
+n_heads: 16
+n_kv_heads: 4
+max_seq_len: 2048
+dropout: 0.0
+norm_eps: 1.0e-05
+rope_theta: 10000.0
+tie_embeddings: true
