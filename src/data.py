@@ -1,15 +1,20 @@
 """
 Data pipeline for pre-training and fine-tuning.
-Supports streaming from HuggingFace, tokenization, packing into binary files,
-and memory-mapped DataLoader for training.
+Supports streaming from HuggingFace, local .txt / .jsonl files,
+tokenization, packing into binary files, and memory-mapped DataLoader
+for training.
+
+Data sources are configured via configs/data.yaml.
 """
 
+import glob
+import json
 import os
-import struct
 import numpy as np
 import torch
+import yaml
 from torch.utils.data import Dataset, DataLoader
-from typing import Optional, List
+from typing import Optional, List, Iterator, Dict, Any
 from tqdm import tqdm
 
 
@@ -45,32 +50,122 @@ class TokenizedDataset(Dataset):
                 f"samples={self.n_samples:,}, seq_len={self.seq_len})")
 
 
+# ──────────────────────────────────────────────
+# Multi-source text iterators
+# ──────────────────────────────────────────────
+
+def _iter_huggingface(source: Dict[str, Any]) -> Iterator[str]:
+    """Yield texts from a HuggingFace streaming dataset."""
+    from datasets import load_dataset
+
+    name = source["name"]
+    subset = source.get("subset")
+    split = source.get("split", "train")
+    text_field = source.get("text_field", "text")
+
+    ds = load_dataset(name, subset, split=split, streaming=True)
+    for sample in ds:
+        text = sample.get(text_field, "")
+        if text and len(text) >= 50:
+            yield text
+
+
+def _iter_text_dir(source: Dict[str, Any]) -> Iterator[str]:
+    """Yield texts from .txt files in a directory (recursive)."""
+    path = source["path"]
+    if not os.path.isdir(path):
+        print(f"  Warning: text_dir path does not exist: {path}")
+        return
+
+    txt_files = sorted(glob.glob(os.path.join(path, "**", "*.txt"), recursive=True))
+    print(f"  Found {len(txt_files)} .txt files in {path}")
+
+    for fpath in txt_files:
+        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read().strip()
+        if text and len(text) >= 50:
+            yield text
+
+
+def _iter_jsonl(source: Dict[str, Any]) -> Iterator[str]:
+    """Yield texts from .jsonl files (single file or directory)."""
+    path = source["path"]
+    text_field = source.get("text_field", "text")
+
+    if os.path.isfile(path):
+        jsonl_files = [path]
+    elif os.path.isdir(path):
+        jsonl_files = sorted(glob.glob(os.path.join(path, "**", "*.jsonl"), recursive=True))
+    else:
+        print(f"  Warning: jsonl path does not exist: {path}")
+        return
+
+    print(f"  Found {len(jsonl_files)} .jsonl files")
+
+    for fpath in jsonl_files:
+        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                text = obj.get(text_field, "")
+                if text and len(text) >= 50:
+                    yield text
+
+
+_SOURCE_ITERATORS = {
+    "huggingface": _iter_huggingface,
+    "text_dir": _iter_text_dir,
+    "jsonl": _iter_jsonl,
+}
+
+
+def iter_texts_from_sources(sources: List[Dict[str, Any]]) -> Iterator[str]:
+    """
+    Yield texts from a list of data source dicts (as defined in data.yaml).
+    Sources are iterated sequentially in config order.
+    """
+    for i, src in enumerate(sources):
+        src_type = src.get("type", "huggingface")
+        iterator_fn = _SOURCE_ITERATORS.get(src_type)
+        if iterator_fn is None:
+            raise ValueError(f"Unknown source type: {src_type}. "
+                             f"Supported: {list(_SOURCE_ITERATORS.keys())}")
+        print(f"  Source {i}: {src_type} — {src.get('name') or src.get('path')}")
+        yield from iterator_fn(src)
+
+
+def load_data_config(config_path: str = "configs/data.yaml") -> Dict[str, Any]:
+    """Load and return the data pipeline config."""
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 def tokenize_and_save(
-    dataset_name: str = "HuggingFaceFW/fineweb-edu",
-    dataset_subset: str = "sample-10BT",
     tokenizer_path: str = "tokenizer_data",
     output_dir: str = "data",
     max_tokens: Optional[int] = None,
+    shard_size: int = 100_000_000,
+    val_every: int = 200,
+    sources: Optional[List[Dict[str, Any]]] = None,
+    config_path: Optional[str] = None,
+    # Legacy single-source args (used when sources is None)
+    dataset_name: str = "HuggingFaceFW/fineweb-edu",
+    dataset_subset: str = "sample-10BT",
     split: str = "train",
-    shard_size: int = 100_000_000,  # 100M tokens per shard
 ):
     """
-    Stream a HuggingFace dataset, tokenize with the trained tokenizer,
-    and save as packed binary files (.bin).
+    Tokenize text from one or more sources and save as packed binary shards.
+
+    Data sources can be specified in three ways (highest priority first):
+      1. ``sources`` — list of source dicts directly
+      2. ``config_path`` — path to a data.yaml config file
+      3. Legacy args (dataset_name/subset/split) — single HuggingFace dataset
 
     Each .bin file contains uint16 token IDs, tightly packed.
-    Creates train and validation splits (val = 0.5% of data).
-
-    Args:
-        dataset_name: HuggingFace dataset name
-        dataset_subset: Dataset subset
-        tokenizer_path: Path to trained tokenizer
-        output_dir: Directory to save binary shards
-        max_tokens: Maximum total tokens to process (None = all)
-        split: Dataset split to use
-        shard_size: Tokens per shard file
+    Creates train and validation splits (every ``val_every``-th doc → val).
     """
-    from datasets import load_dataset
     from .tokenizer import LLMTokenizer
 
     os.makedirs(output_dir, exist_ok=True)
@@ -79,30 +174,42 @@ def tokenize_and_save(
     tok = LLMTokenizer(tokenizer_path)
     print(f"Loaded tokenizer (vocab_size={tok.vocab_size})")
 
-    # Stream dataset
-    print(f"Streaming {dataset_name}/{dataset_subset}...")
-    ds = load_dataset(dataset_name, dataset_subset, split=split, streaming=True)
+    # Resolve sources
+    if sources is None and config_path is not None:
+        cfg = load_data_config(config_path)
+        sources = cfg.get("sources", [])
+        proc = cfg.get("processing", {})
+        max_tokens = max_tokens or proc.get("max_tokens")
+        shard_size = proc.get("shard_size", shard_size)
+        output_dir = proc.get("output_dir", output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+    if sources:
+        print(f"Tokenizing from {len(sources)} source(s)...")
+        text_iter = iter_texts_from_sources(sources)
+    else:
+        # Legacy: single HuggingFace dataset
+        from datasets import load_dataset
+        print(f"Streaming {dataset_name}/{dataset_subset}...")
+        ds = load_dataset(dataset_name, dataset_subset, split=split, streaming=True)
+        text_iter = (s.get("text", "") for s in ds)
 
     # Tokenize and write to shards
     shard_idx = 0
     token_count = 0
     buffer = np.empty(shard_size, dtype=np.uint16)
     buf_pos = 0
-    val_every = 200  # Every 200th document goes to validation
 
-    # Open validation buffer
-    val_buffer = []
+    val_buffer: list = []
     val_tokens = 0
 
-    for doc_idx, sample in enumerate(tqdm(ds, desc="Tokenizing")):
-        text = sample.get("text", "")
+    for doc_idx, text in enumerate(tqdm(text_iter, desc="Tokenizing")):
         if not text or len(text) < 50:
             continue
 
         ids = tok.encode(text, add_bos=True, add_eos=True)
 
         if max(ids) >= 65535:
-            # uint16 overflow safety — skip (shouldn't happen with 32K vocab)
             continue
 
         is_val = (doc_idx % val_every == 0)
@@ -117,7 +224,6 @@ def tokenize_and_save(
                 token_count += 1
 
                 if buf_pos >= shard_size:
-                    # Flush shard
                     shard_path = os.path.join(output_dir, f"train_{shard_idx:04d}.bin")
                     buffer[:buf_pos].tofile(shard_path)
                     print(f"  Saved {shard_path} ({buf_pos:,} tokens)")

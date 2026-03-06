@@ -1,0 +1,47 @@
+# ─── Data Pipeline Configuration ───
+# Defines all data sources for tokenizer training and model training.
+# Sources are processed in order; use 'weight' to control mixing ratios.
+
+tokenizer:
+  vocab_size: 32000
+  num_samples: 50000          # Text samples for BPE tokenizer training
+  save_path: tokenizer_data
+
+processing:
+  output_dir: data
+  max_tokens: 5000000         # Total tokens to produce (null = unlimited)
+  shard_size: 100000000       # Tokens per binary shard file
+  val_ratio: 0.005            # Fraction of documents reserved for validation
+
+# ─── Data Sources ───
+# Each source has:
+#   type:   "huggingface" | "text_dir" | "jsonl"
+#   weight: Relative sampling weight when mixing sources (default: 1.0)
+#
+# HuggingFace source:
+#   name, subset, split, text_field
+#
+# Local text directory:
+#   path      — directory of .txt files (recursively scanned)
+#
+# JSONL files:
+#   path      — single .jsonl file or directory of .jsonl files
+#   text_field — JSON key containing the text (default: "text")
+
+sources:
+  - type: huggingface
+    name: HuggingFaceFW/fineweb-edu
+    subset: sample-10BT
+    split: train
+    text_field: text
+    weight: 1.0
+
+  # ── Uncomment to add your own data ──────────────────────────
+  # - type: text_dir
+  #   path: data/custom/txt      # Put .txt files here
+  #   weight: 1.0
+  #
+  # - type: jsonl
+  #   path: data/custom/jsonl     # Put .jsonl files here
+  #   text_field: text            # JSON key with the text
+  #   weight: 1.0
