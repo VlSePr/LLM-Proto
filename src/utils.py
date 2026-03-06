@@ -204,9 +204,9 @@ def load_checkpoint(
     if "numpy" in rng:
         np.random.set_state(rng["numpy"])
     if "torch" in rng:
-        torch.random.set_rng_state(rng["torch"])
+        torch.random.set_rng_state(rng["torch"].cpu().to(torch.uint8))
     if "cuda" in rng and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(rng["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in rng["cuda"]])
 
     print(f"Resumed from step {checkpoint['step']} (loss={checkpoint['loss']:.4f})")
     return checkpoint
