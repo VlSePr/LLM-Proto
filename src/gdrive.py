@@ -25,7 +25,13 @@ def _get_service(credentials_path: str):
             scopes=["https://www.googleapis.com/auth/drive.file"],
         )
     else:
-        # Fall back to default application credentials (e.g. Colab, gcloud auth)
+        # On Colab, trigger the interactive OAuth consent so the user's
+        # Google account (not the VM's service account) is used.
+        import sys
+        if "google.colab" in sys.modules:
+            from google.colab import auth
+            auth.authenticate_user()
+
         import google.auth
         creds, _ = google.auth.default(
             scopes=["https://www.googleapis.com/auth/drive.file"],
