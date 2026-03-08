@@ -16,29 +16,40 @@ def _get_service(credentials_path: str):
     if _drive_service is not None:
         return _drive_service
 
-    from google.oauth2 import service_account
     from googleapiclient.discovery import build
 
+    SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
     if credentials_path and os.path.isfile(credentials_path):
+        from google.oauth2 import service_account
         creds = service_account.Credentials.from_service_account_file(
-            credentials_path,
-            scopes=["https://www.googleapis.com/auth/drive.file"],
+            credentials_path, scopes=SCOPES,
         )
     else:
-        # On Colab, trigger the interactive OAuth consent so the user's
-        # Google account (not the VM's service account) is used.
         import sys
         if "google.colab" in sys.modules:
+            # Colab: use the interactive OAuth flow so the user's own
+            # Google account is authorised (not the VM service account).
             from google.colab import auth
             auth.authenticate_user()
-
-        import google.auth
-        creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/drive.file"],
-        )
+            from google.auth import default as _default
+            creds, _ = _default()
+            # The user-consented creds are unscoped; add Drive scope.
+            if hasattr(creds, "with_scopes"):
+                creds = creds.with_scopes(SCOPES)
+        else:
+            # Local / vast.ai: rely on ADC (gcloud auth application-default login)
+            import google.auth
+            creds, _ = google.auth.default(scopes=SCOPES)
 
     _drive_service = build("drive", "v3", credentials=creds)
     return _drive_service
+
+
+def reset_service():
+    """Clear the cached Drive service so the next call re-authenticates."""
+    global _drive_service
+    _drive_service = None
 
 
 def upload_to_gdrive(
