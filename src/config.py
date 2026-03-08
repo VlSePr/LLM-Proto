@@ -103,6 +103,12 @@ class TrainConfig:
     save_to_hf_hub: bool = False       # Upload checkpoints to HF Hub
     hf_repo_id: str = ""               # HF Hub repo for checkpoint backup
 
+    # --- Google Drive backup ---
+    backup_to_gdrive: bool = False             # Upload checkpoints to Google Drive
+    gdrive_folder_id: str = ""                 # Google Drive folder ID to upload into
+    gdrive_credentials_path: str = ""          # Path to service account JSON or OAuth credentials
+    gdrive_cleanup_remote: bool = True         # Remove old remote checkpoints (mirrors keep_last_n)
+
     # --- Logging ---
     log_every_steps: int = 10           # Log metrics every N steps
     eval_every_steps: int = 500         # Run validation every N steps

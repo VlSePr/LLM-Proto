@@ -116,10 +116,15 @@ def train(
     start_step = 0
     best_val_loss = float("inf")
 
-    if has_checkpoint(train_config.checkpoint_dir, train_config.resume):
+    gdrive_kw = dict(
+        gdrive_folder_id=train_config.gdrive_folder_id if train_config.backup_to_gdrive else "",
+        gdrive_credentials_path=train_config.gdrive_credentials_path,
+    )
+
+    if has_checkpoint(train_config.checkpoint_dir, train_config.resume, **gdrive_kw):
         ckpt = load_checkpoint(
             train_config.checkpoint_dir, train_config.resume,
-            model, optimizer, device,
+            model, optimizer, device, **gdrive_kw,
         )
         start_step = ckpt["step"] + 1
         best_val_loss = ckpt.get("best_val_loss", float("inf"))

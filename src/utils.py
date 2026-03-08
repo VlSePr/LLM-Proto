@@ -147,6 +147,26 @@ def save_checkpoint(
     # Cleanup old checkpoints (keep last N + best)
     cleanup_checkpoints(checkpoint_dir, train_config.keep_last_n_checkpoints)
 
+    # ── Google Drive backup ──
+    if train_config.backup_to_gdrive and train_config.gdrive_folder_id:
+        try:
+            from .gdrive import upload_to_gdrive, cleanup_remote_checkpoints
+
+            upload_to_gdrive(path, train_config.gdrive_folder_id, train_config.gdrive_credentials_path)
+            upload_to_gdrive(latest_path, train_config.gdrive_folder_id, train_config.gdrive_credentials_path)
+            if is_best:
+                upload_to_gdrive(best_path, train_config.gdrive_folder_id, train_config.gdrive_credentials_path)
+
+            if train_config.gdrive_cleanup_remote:
+                cleanup_remote_checkpoints(
+                    train_config.gdrive_folder_id,
+                    train_config.keep_last_n_checkpoints,
+                    train_config.gdrive_credentials_path,
+                )
+            print(f"  → Backed up checkpoint to Google Drive")
+        except Exception as e:
+            print(f"  ⚠ Google Drive backup failed: {e}")
+
     return path
 
 
@@ -166,9 +186,14 @@ def load_checkpoint(
     model: torch.nn.Module,
     optimizer: Optional[torch.optim.Optimizer] = None,
     device: torch.device = torch.device("cpu"),
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
 ) -> dict:
     """
     Load a checkpoint and restore model/optimizer state.
+
+    If the checkpoint is not found locally but gdrive_folder_id is set,
+    it is downloaded from Google Drive first.
 
     Args:
         checkpoint_dir: Directory containing checkpoints
@@ -176,16 +201,34 @@ def load_checkpoint(
         model: Model to load weights into
         optimizer: Optimizer to load state into (optional)
         device: Device to load tensors to
+        gdrive_folder_id: Google Drive folder to fetch from (optional)
+        gdrive_credentials_path: Service-account JSON path (optional)
 
     Returns:
         Checkpoint dict with step, loss, etc.
     """
     if resume == "latest":
-        path = os.path.join(checkpoint_dir, "latest.pt")
+        filename = "latest.pt"
     elif resume == "best":
-        path = os.path.join(checkpoint_dir, "best.pt")
+        filename = "best.pt"
     else:
-        path = os.path.join(checkpoint_dir, f"{resume}.pt")
+        filename = f"{resume}.pt"
+
+    path = os.path.join(checkpoint_dir, filename)
+
+    # Try downloading from Google Drive when the local file is missing
+    if not os.path.exists(path) and gdrive_folder_id:
+        try:
+            from .gdrive import download_from_gdrive
+            print(f"Checkpoint not found locally, downloading '{filename}' from Google Drive...")
+            path = download_from_gdrive(
+                filename, gdrive_folder_id, checkpoint_dir, gdrive_credentials_path,
+            )
+            print(f"  → Downloaded to {path}")
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Checkpoint '{filename}' not found locally or on Google Drive: {e}"
+            )
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -212,15 +255,31 @@ def load_checkpoint(
     return checkpoint
 
 
-def has_checkpoint(checkpoint_dir: str, resume: str) -> bool:
-    """Check if a resumable checkpoint exists."""
+def has_checkpoint(checkpoint_dir: str, resume: str, gdrive_folder_id: str = "", gdrive_credentials_path: str = "") -> bool:
+    """Check if a resumable checkpoint exists locally or on Google Drive."""
     if not resume:
         return False
+
     if resume == "latest":
-        return os.path.exists(os.path.join(checkpoint_dir, "latest.pt"))
-    if resume == "best":
-        return os.path.exists(os.path.join(checkpoint_dir, "best.pt"))
-    return os.path.exists(os.path.join(checkpoint_dir, f"{resume}.pt"))
+        filename = "latest.pt"
+    elif resume == "best":
+        filename = "best.pt"
+    else:
+        filename = f"{resume}.pt"
+
+    if os.path.exists(os.path.join(checkpoint_dir, filename)):
+        return True
+
+    # Check Google Drive
+    if gdrive_folder_id:
+        try:
+            from .gdrive import _get_service, _find_file
+            service = _get_service(gdrive_credentials_path)
+            return _find_file(service, filename, gdrive_folder_id) is not None
+        except Exception:
+            return False
+
+    return False
 
 
 # ──────────────────────────────────────────────

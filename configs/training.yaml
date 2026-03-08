@@ -34,6 +34,12 @@ checkpoint_dir: checkpoints
 save_every_steps: 500
 keep_last_n_checkpoints: 5
 
+# --- Google Drive backup ---
+backup_to_gdrive: false
+gdrive_folder_id: ''              # Target folder ID from Drive URL
+gdrive_credentials_path: ''       # Path to service-account JSON (empty = default creds)
+gdrive_cleanup_remote: true       # Mirror keep_last_n on remote
+
 # --- Logging ---
 log_every_steps: 10
 eval_every_steps: 500
