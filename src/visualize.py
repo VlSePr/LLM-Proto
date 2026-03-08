@@ -3,11 +3,18 @@ Visualization of model internals and training metrics.
 Generates matplotlib figures logged to Wandb.
 """
 
+import sys
 import torch
 import torch.nn.functional as F
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")  # Non-interactive backend for server environments
+# Use non-interactive backend only when there's no display (headless servers).
+# In notebooks / interactive sessions, let matplotlib pick the right backend.
+if not any(k in sys.modules for k in ("IPython", "ipykernel", "google.colab")):
+    try:
+        matplotlib.use("Agg")
+    except Exception:
+        pass
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Optional, List

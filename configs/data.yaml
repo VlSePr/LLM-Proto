@@ -45,3 +45,18 @@ sources:
   #   path: data/custom/jsonl     # Put .jsonl files here
   #   text_field: text            # JSON key with the text
   #   weight: 1.0
+
+  # ── Google Drive data (Colab only) ─────────────────────────
+  # Mount happens automatically. Put .txt or .jsonl files in a
+  # Drive folder, then point to it below.
+  #
+  # For .txt files:
+  # - type: text_dir
+  #   path: /content/drive/MyDrive/my-training-data/txt
+  #   weight: 1.0
+  #
+  # For .jsonl files:
+  # - type: jsonl
+  #   path: /content/drive/MyDrive/my-training-data/jsonl
+  #   text_field: text
+  #   weight: 1.0
