@@ -9,7 +9,7 @@ tokenizer:
 
 processing:
   output_dir: data
-  max_tokens:  500000000       # Total tokens to produce (null = unlimited)
+  max_tokens:         # Total tokens to produce (null = unlimited)
   shard_size: 100000000       # Tokens per binary shard file
   val_ratio: 0.005            # Fraction of documents reserved for validation
 
