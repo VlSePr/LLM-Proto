@@ -46,7 +46,8 @@ def get_dtype(precision: str = "auto") -> torch.dtype:
         return torch.float16
     if precision == "fp32":
         return torch.float32
-    # Auto-detect
+    # Auto-detect: prefer bf16 (same range as fp32, no GradScaler needed) on Ampere+ GPUs,
+    # fall back to fp16 (needs GradScaler) on older GPUs, fp32 on CPU.
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
         return torch.bfloat16
     if torch.cuda.is_available():
@@ -73,7 +74,11 @@ def should_compile(setting: str = "auto") -> bool:
 # ──────────────────────────────────────────────
 
 def set_seed(seed: int):
-    """Set all random seeds for reproducibility."""
+    """
+    Set all random seeds for reproducibility.
+    All four RNG sources must be seeded to ensure identical results across runs:
+    Python's random (for data shuffling), NumPy (for data loading), PyTorch CPU, and CUDA.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -86,14 +91,27 @@ def set_seed(seed: int):
 # ──────────────────────────────────────────────
 
 def get_lr(step: int, warmup_steps: int, max_steps: int, peak_lr: float, min_lr: float) -> float:
-    """Cosine decay with linear warmup."""
+    """
+    Cosine decay with linear warmup — the standard LR schedule for LLM pre-training.
+
+    Phase 1 (warmup): LR ramps linearly from 0 to peak_lr over warmup_steps.
+      This prevents large, poorly-directed gradient updates before the optimizer's
+      moment estimates (Adam's m and v) have warmed up.
+
+    Phase 2 (cosine decay): LR follows a half-cosine curve from peak_lr down to min_lr.
+      Cosine decay is smoother than step decay and empirically gives ~0.5-1% better
+      final loss than linear decay (Loshchilov & Hutter, 2016).
+
+    Formula: lr = min_lr + (peak_lr - min_lr) * 0.5 * (1 + cos(pi * progress))
+    """
     if step < warmup_steps:
+        # Linear warmup: LR increases proportionally with step
         return peak_lr * (step + 1) / warmup_steps
     if step >= max_steps:
         return min_lr
-    # Cosine decay
+    # Cosine decay: progress goes from 0.0 to 1.0 over the decay phase
     progress = (step - warmup_steps) / (max_steps - warmup_steps)
-    cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+    cosine = 0.5 * (1.0 + np.cos(np.pi * progress))  # Ranges from 1.0 down to 0.0
     return min_lr + (peak_lr - min_lr) * cosine
 
 
@@ -124,6 +142,9 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "model_config": asdict(model_config),
         "train_config": asdict(train_config),
+        # Save all RNG states so we can resume training with the *exact* same random
+        # sequence. Without this, resumed training would see different data order and
+        # dropout masks, making results non-reproducible.
         "rng_state": {
             "python": random.getstate(),
             "numpy": np.random.get_state(),
@@ -131,12 +152,14 @@ def save_checkpoint(
         },
     }
     if torch.cuda.is_available():
+        # Save RNG state for ALL GPUs (even if single-GPU) to support future multi-GPU resume
         checkpoint["rng_state"]["cuda"] = torch.cuda.get_rng_state_all()
 
     path = os.path.join(checkpoint_dir, f"step_{step}.pt")
     torch.save(checkpoint, path)
 
-    # Also save as latest (for easy resume)
+    # "latest.pt" is a convenience alias: always points to the most recent checkpoint.
+    # This way, resume="latest" always works without knowing the exact step number.
     latest_path = os.path.join(checkpoint_dir, "latest.pt")
     torch.save(checkpoint, latest_path)
 
@@ -240,13 +263,15 @@ def load_checkpoint(
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-    # Restore RNG states
+    # Restore RNG states for bit-exact reproducibility when resuming.
+    # Each RNG type (Python, NumPy, PyTorch CPU/CUDA) must be restored independently.
     rng = checkpoint.get("rng_state", {})
     if "python" in rng:
         random.setstate(rng["python"])
     if "numpy" in rng:
         np.random.set_state(rng["numpy"])
     if "torch" in rng:
+        # Cast to uint8 in case the state was saved on a different device/dtype
         torch.random.set_rng_state(rng["torch"].cpu().to(torch.uint8))
     if "cuda" in rng and torch.cuda.is_available():
         torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in rng["cuda"]])

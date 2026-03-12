@@ -59,10 +59,14 @@ def generate_text(
     if device is None:
         device = get_device()
 
+    # Encode with BOS so the model sees a clean sequence start signal.
     input_ids = tokenizer.encode(prompt, add_bos=True)
     input_tensor = torch.tensor([input_ids], dtype=torch.long, device=device)
 
     with torch.no_grad():
+        # model.generate() uses KV-cache internally: the full prompt is processed
+        # in one pass (prefill), then each new token only computes attention over
+        # cached K/V plus the single new query — O(T) per step instead of O(T²).
         output_ids = model.generate(
             input_tensor,
             max_new_tokens=max_new_tokens,
@@ -109,7 +113,9 @@ def interactive_chat(
             print("Chat cleared.")
             continue
 
-        # Parse inline parameters (e.g., "/temp 0.5")
+        # Slash-commands let users adjust sampling parameters at runtime without
+        # restarting the session. This is useful for exploring how temperature,
+        # top-k, and top-p affect the model's creativity vs. coherence trade-off.
         if prompt.startswith("/temp "):
             try:
                 temperature = float(prompt.split()[1])
@@ -140,7 +146,8 @@ def interactive_chat(
             top_p=top_p,
             device=device,
         )
-        # Strip the prompt from the response for display
+        # model.generate() returns the full sequence (prompt + completion).
+        # Strip the prompt prefix so we only display the model's new tokens.
         if response.startswith(prompt):
             response = response[len(prompt):]
         print(f"\nModel: {response.strip()}")

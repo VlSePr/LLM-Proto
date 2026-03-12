@@ -56,7 +56,12 @@ def train(
         print("Gradient checkpointing enabled.")
 
     # ── Optimizer ──
-    # Separate weight-decay and no-decay param groups
+    # Separate parameters into two groups:
+    # 1. "Decay" params (2D+ weight matrices): get weight decay to prevent overfitting.
+    # 2. "No-decay" params (1D: biases, norms, embeddings): excluded from decay because
+    #    - LayerNorm/RMSNorm scale params should be free to grow.
+    #    - Biases have too few params for regularization to matter.
+    #    - Decaying norms can destabilize training.
     decay_params = []
     no_decay_params = []
     for name, param in model.named_parameters():
@@ -71,6 +76,19 @@ def train(
         {"params": decay_params, "weight_decay": train_config.weight_decay},
         {"params": no_decay_params, "weight_decay": 0.0},
     ]
+    # AdamW (decoupled weight decay) is chosen over Adam + L2 regularization because:
+    # - In standard Adam, L2 penalty interacts with the adaptive learning rate per-param,
+    #   making effective regularization inconsistent across parameters.
+    # - AdamW applies weight decay *directly* to weights (w = w - lr*wd*w), independent of
+    #   Adam's moment estimates, giving uniform regularization.
+    # - This is the standard optimizer for all modern LLMs (GPT-3, LLaMA, Chinchilla).
+    #
+    # beta1=0.9: momentum decay — standard value, averages ~10 recent gradients.
+    # beta2=0.95: second moment decay — lower than the default 0.999 because LLM training
+    #   with large batch sizes produces noisier gradient variance estimates; 0.95 adapts
+    #   faster to changing gradient magnitudes (used in GPT-3, Chinchilla, LLaMA papers).
+    # fused=True on CUDA: uses a single fused kernel that updates all params in one pass,
+    #   avoiding multiple kernel launches — typically 5-15% faster.
     optimizer = torch.optim.AdamW(
         optim_groups,
         lr=train_config.peak_lr,
@@ -131,9 +149,13 @@ def train(
         print(f"Resumed from step {start_step}")
 
     # ── Mixed precision context ──
+    # Automatic Mixed Precision (AMP) runs most operations in bf16/fp16 while keeping
+    # master weights in fp32. This halves memory usage and doubles throughput on modern GPUs.
     use_amp = dtype in (torch.float16, torch.bfloat16) and device.type == "cuda"
     amp_ctx = torch.amp.autocast(device_type="cuda", dtype=dtype) if use_amp else nullcontext()
-    # GradScaler only needed for fp16, not bf16
+    # GradScaler is only needed for fp16 — it scales the loss up before backward to prevent
+    # gradient underflow in fp16, then unscales before optimizer step.
+    # bf16 has the same exponent range as fp32 (8 bits), so it doesn't need scaling.
     scaler = GradScaler(enabled=(use_amp and dtype == torch.float16))
 
     # ── Training loop ──
@@ -154,14 +176,22 @@ def train(
     for step in range(start_step, train_config.max_steps):
         t0 = time.time()
 
-        # Update learning rate
+        # Update learning rate following a cosine decay schedule with linear warmup.
+        # Warmup: gradually ramp LR from 0 to peak_lr to stabilize early training
+        #   when gradients are large and poorly directed.
+        # Cosine decay: smoothly decrease LR toward min_lr, which empirically gives
+        #   better final loss than step decay or linear decay.
         lr = get_lr(step, train_config.warmup_steps, train_config.max_steps,
                      train_config.peak_lr, train_config.min_lr)
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
         # ── Gradient accumulation ──
-        optimizer.zero_grad(set_to_none=True)
+        # Simulates a larger effective batch without requiring more GPU memory.
+        # Instead of one big batch, process N micro-batches, accumulate gradients,
+        # then do a single optimizer step. This is essential when the target effective
+        # batch size doesn't fit in GPU memory (e.g., batch=32 × accum=4 = 128 effective).
+        optimizer.zero_grad(set_to_none=True)  # set_to_none=True saves memory vs zeroing
         accum_loss = 0.0
 
         for micro_step in range(train_config.gradient_accumulation_steps):
@@ -177,14 +207,21 @@ def train(
 
             with amp_ctx:
                 out = model(input_ids, targets=targets)
+                # Divide loss by accumulation steps so that the *sum* of micro-batch gradients
+                # equals the gradient of the full effective batch (mathematically equivalent
+                # to computing loss over the entire effective batch at once).
                 loss = out["loss"] / train_config.gradient_accumulation_steps
 
+            # scaler.scale() multiplies loss by a dynamic scale factor (fp16 only)
+            # to prevent gradient underflow. backward() accumulates into .grad.
             scaler.scale(loss).backward()
             accum_loss += loss.item()
 
-        # Gradient clipping
+        # Gradient clipping: cap the global L2 norm of all gradients to prevent
+        # exploding gradients, which can destabilize training (especially early on
+        # or after a bad batch). max_grad_norm=1.0 is the standard for LLM training.
         if train_config.max_grad_norm > 0:
-            scaler.unscale_(optimizer)
+            scaler.unscale_(optimizer)  # Unscale gradients before clipping (required for fp16)
             torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.max_grad_norm)
 
         scaler.step(optimizer)

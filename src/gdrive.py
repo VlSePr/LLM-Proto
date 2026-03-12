@@ -1,13 +1,15 @@
 """
 Google Drive backup for checkpoints.
 
-Two modes:
+Two modes (chosen automatically based on runtime environment):
   - **Colab**: mounts Google Drive via ``drive.mount()`` and copies files
-    to ``/content/drive/MyDrive/<folder_id>/``.  No API credentials needed.
+    to ``/content/drive/MyDrive/<folder_id>/``.  No API credentials needed;
+    uses the authenticated Colab session directly.
     ``folder_id`` is the **folder name** under My Drive (created automatically).
-  - **Local / vast.ai**: uses the Drive REST API with a service-account JSON
-    or Application Default Credentials.  ``folder_id`` is the real Drive
-    folder **ID** (the hash from the URL).
+  - **Local / vast.ai**: uses the Drive REST API v3 with a service-account JSON
+    or Application Default Credentials. This requires a one-time credential setup
+    but works anywhere (SSH servers, CI, cloud VMs).
+    ``folder_id`` is the real Drive folder **ID** (the 33-char hash from the URL).
 """
 
 import os
@@ -41,11 +43,14 @@ def _colab_folder(folder_id: str) -> str:
 # Drive API helpers  (non-Colab only)
 # ──────────────────────────────────────────────
 
+# Singleton: cache the Drive v3 service to avoid repeated OAuth handshakes.
+# Building the service involves HTTP calls to discover the API schema,
+# so reusing it across uploads/downloads saves significant latency.
 _drive_service = None
 
 
 def _get_service(credentials_path: str):
-    """Build and cache the Drive v3 API service."""
+    """Build and cache the Drive v3 API service (singleton pattern)."""
     global _drive_service
     if _drive_service is not None:
         return _drive_service
@@ -114,6 +119,9 @@ def upload_to_gdrive(
 
     service = _get_service(credentials_path)
     existing_id = _find_file(service, filename, folder_id)
+    # resumable=True enables chunked uploads — if the connection drops mid-transfer,
+    # the upload can resume from the last successfully sent chunk instead of restarting.
+    # This is essential for large checkpoint files (100 MB+) over unreliable connections.
     media = MediaFileUpload(local_path, resumable=True)
 
     if existing_id:
@@ -139,7 +147,9 @@ def cleanup_remote_checkpoints(
 ):
     """
     Remove old ``step_*.pt`` files, keeping the last *keep_n*.
-    Special files (latest.pt, best.pt) are never removed.
+    Special files (latest.pt, best.pt) are never removed, so you always
+    have a fast-resume checkpoint and the best-loss checkpoint available.
+    Sorted by creation time — oldest checkpoints are deleted first.
     """
     # ── Colab: filesystem cleanup ──
     if _is_colab():

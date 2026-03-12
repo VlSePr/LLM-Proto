@@ -22,25 +22,34 @@ class TokenizedDataset(Dataset):
     """
     Memory-mapped dataset of packed token sequences.
     Reads from a .bin file (uint16 token IDs) with zero-copy access.
-    Each sample is a contiguous chunk of `seq_len` tokens.
+    Each sample is a contiguous chunk of ``seq_len`` tokens.
     """
 
     def __init__(self, bin_path: str, seq_len: int):
         self.seq_len = seq_len
 
-        # Memory-map the binary file
+        # Memory-map: the OS maps the file into virtual memory without loading it all into RAM.
+        # This enables datasets larger than available RAM — only accessed pages are loaded.
+        # uint16 supports vocab sizes up to 65535, which is enough for typical BPE tokenizers
+        # (32K-64K vocab) while using 2 bytes/token instead of 4 (int32) — halving disk and memory usage.
         self.data = np.memmap(bin_path, dtype=np.uint16, mode="r")
         self.n_tokens = len(self.data)
-        self.n_samples = (self.n_tokens - 1) // seq_len  # -1 because targets are shifted by 1
+        # -1 because the last token of each sequence is used as the target for the
+        # previous token (next-token prediction: input[i] predicts target[i] = input[i+1])
+        self.n_samples = (self.n_tokens - 1) // seq_len
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
         start = idx * self.seq_len
-        end = start + self.seq_len + 1  # +1 for the target shift
+        end = start + self.seq_len + 1  # +1 to have the next-token target for position seq_len-1
+        # Cast to int64 for PyTorch — nn.Embedding requires LongTensor (int64), not uint16
         chunk = self.data[start:end].astype(np.int64)
 
+        # Standard next-token prediction setup:
+        # input_ids  = [t0, t1, t2, ..., t_{n-1}]
+        # targets    = [t1, t2, t3, ..., t_n]
         input_ids = torch.from_numpy(chunk[:-1])   # (seq_len,)
         targets = torch.from_numpy(chunk[1:])       # (seq_len,)
         return input_ids, targets
@@ -63,9 +72,13 @@ def _iter_huggingface(source: Dict[str, Any]) -> Iterator[str]:
     split = source.get("split", "train")
     text_field = source.get("text_field", "text")
 
+    # Streaming mode: no download needed — data is fetched on-the-fly in small chunks.
+    # Essential for large datasets (e.g., 10B tokens) that won't fit on disk.
     ds = load_dataset(name, subset, split=split, streaming=True)
     for sample in ds:
         text = sample.get(text_field, "")
+        # Skip very short documents — they add noise without meaningful context
+        # and waste tokenizer overhead (BOS/EOS tokens per doc)
         if text and len(text) >= 50:
             yield text
 
@@ -163,8 +176,16 @@ def tokenize_and_save(
       2. ``config_path`` — path to a data.yaml config file
       3. Legacy args (dataset_name/subset/split) — single HuggingFace dataset
 
-    Each .bin file contains uint16 token IDs, tightly packed.
-    Creates train and validation splits (every ``val_every``-th doc → val).
+    Each .bin file contains uint16 token IDs, tightly packed (no padding or separators
+    between documents). This "packing" approach maximizes GPU utilization — every token
+    in a batch contributes to the loss, unlike padded batches where pad tokens are wasted.
+
+    Sharding into ~100M-token files keeps individual files manageable and enables
+    parallel loading from multiple workers.
+
+    Train/val split: every ``val_every``-th document goes to validation.
+    This interleaved split ensures the val set is representative of the full data
+    distribution, rather than being biased by document ordering.
     """
     from .tokenizer import LLMTokenizer
 
@@ -197,6 +218,8 @@ def tokenize_and_save(
     # Tokenize and write to shards
     shard_idx = 0
     token_count = 0
+    # Pre-allocate a large numpy buffer and fill it token-by-token.
+    # Writing to disk only when a shard is full minimizes I/O operations.
     buffer = np.empty(shard_size, dtype=np.uint16)
     buf_pos = 0
 
@@ -209,9 +232,13 @@ def tokenize_and_save(
 
         ids = tok.encode(text, add_bos=True, add_eos=True)
 
+        # Skip tokens that overflow uint16 (token ID >= 65535).
+        # This is a safety check for tokenizers with very large vocabularies.
         if max(ids) >= 65535:
             continue
 
+        # Interleaved train/val split: every val_every-th document → validation.
+        # Using document index ensures deterministic splitting regardless of text content.
         is_val = (doc_idx % val_every == 0)
 
         if is_val:
@@ -257,6 +284,9 @@ class ShardedTokenDataset(Dataset):
     """
     Dataset that reads from multiple binary shards.
     Useful when data is split across multiple .bin files.
+
+    All shards are memory-mapped at init (cheap — no data loaded until accessed).
+    An index maps each sample to its (shard, offset) pair for O(1) random access.
     """
 
     def __init__(self, data_dir: str, seq_len: int, split: str = "train"):
@@ -277,7 +307,8 @@ class ShardedTokenDataset(Dataset):
         if not shard_files:
             raise FileNotFoundError(f"No {split} shards found in {data_dir}")
 
-        # Memory-map all shards
+        # Memory-map all shards at once — the OS handles page faults on demand,
+        # so only the data actually read during training touches RAM.
         self.shards = [np.memmap(f, dtype=np.uint16, mode="r") for f in shard_files]
         self.shard_lengths = [len(s) for s in self.shards]
         self.total_tokens = sum(self.shard_lengths)
@@ -321,6 +352,6 @@ def create_dataloader(
         batch_size=batch_size,
         shuffle=shuffle if split == "train" else False,
         num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
+        pin_memory=True,   # Pre-copy data to CUDA-pinned RAM for faster GPU transfers
+        drop_last=True,    # Drop incomplete last batch to keep batch size consistent
     )

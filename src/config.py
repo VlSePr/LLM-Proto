@@ -14,27 +14,29 @@ class ModelConfig:
     """All model architecture parameters. Change these to scale from 30M to 1B+."""
 
     # Core dimensions
-    vocab_size: int = 32_000
-    dim: int = 512            # Hidden dimension (d_model)
-    n_layers: int = 6         # Number of transformer blocks
-    n_heads: int = 8          # Number of attention heads
-    n_kv_heads: int = 4       # Number of key-value heads (for GQA)
-    max_seq_len: int = 2048   # Maximum sequence length
+    vocab_size: int = 32_000       # 32K is the sweet spot: covers English + code well with BPE
+    dim: int = 512                 # Hidden dimension (d_model) — the "width" of the model
+    n_layers: int = 6              # Number of transformer blocks — the "depth" of the model
+    n_heads: int = 8               # Number of attention heads (each sees dim/n_heads dimensions)
+    n_kv_heads: int = 4            # GQA: fewer KV heads → less KV-cache memory at inference time
+    max_seq_len: int = 2048        # Context window — max tokens the model can attend to at once
 
     # Feed-forward network
-    # SwiGLU FFN hidden dim. If None, computed as 2/3 * 4 * dim, rounded to multiple of 256
+    # SwiGLU FFN hidden dim. If None, computed as 2/3 × 4 × dim, rounded to multiple of 256
+    # (see __post_init__ for the formula and rationale)
     ffn_dim: Optional[int] = None
 
     # Regularization
-    dropout: float = 0.0      # Dropout rate (0 for pre-training, >0 for fine-tuning)
+    dropout: float = 0.0           # 0 for pre-training (data is diverse enough); >0 for fine-tuning
 
     # Normalization
-    norm_eps: float = 1e-5    # RMSNorm epsilon
+    norm_eps: float = 1e-5         # RMSNorm epsilon — prevents division by zero in normalization
 
     # Positional encoding
-    rope_theta: float = 10_000.0  # RoPE base frequency
+    rope_theta: float = 10_000.0   # RoPE base frequency — controls the wavelength spectrum of rotations
 
     # Weight tying: share embedding and output projection weights
+    # Reduces param count, and provides a useful learning signal (see model.py for details)
     tie_embeddings: bool = True
 
     def __post_init__(self):
@@ -42,7 +44,11 @@ class ModelConfig:
         assert self.n_heads % self.n_kv_heads == 0, "n_heads must be divisible by n_kv_heads"
 
         if self.ffn_dim is None:
-            # SwiGLU: 2/3 * 4 * dim, rounded to nearest multiple of 256
+            # SwiGLU uses 3 matrices (gate, up, down) instead of 2 in standard FFN.
+            # To keep total FFN params ≈ same as standard 4×dim FFN (2 matrices of dim×4dim),
+            # we use: hidden = 2/3 × 4 × dim ≈ 2.67× dim.
+            # Rounding to multiple of 256 aligns with GPU tensor core tile sizes (8, 16, 32...),
+            # ensuring matrix dimensions are evenly divisible for maximum CUDA kernel efficiency.
             raw = int(2 / 3 * 4 * self.dim)
             self.ffn_dim = ((raw + 255) // 256) * 256
 
@@ -75,31 +81,33 @@ class TrainConfig:
     tokenizer_path: str = "tokenizer_data"
 
     # --- Optimization ---
-    batch_size: int = 32       # Per-device micro batch size (sequences)
-    gradient_accumulation_steps: int = 4  # Effective batch = batch_size * grad_accum * seq_len tokens
-    max_steps: int = 50_000    # Total optimization steps
-    warmup_steps: int = 2_000  # Linear warmup steps
+    batch_size: int = 32       # Per-device micro batch size (sequences per forward pass)
+    gradient_accumulation_steps: int = 4  # Effective batch = batch_size × grad_accum × seq_len tokens
+    max_steps: int = 50_000    # Total optimization steps (not epochs — step-based is standard for LLMs)
+    warmup_steps: int = 2_000  # Linear warmup: prevents early instability from large initial gradients
 
-    # Learning rate
+    # Learning rate — peak_lr=6e-4 is the Chinchilla-optimal range for models under 1B params.
+    # Higher LR for smaller models, lower for larger (scales roughly as 1/sqrt(model_size)).
     peak_lr: float = 6e-4
-    min_lr: float = 6e-5       # Minimum LR (cosine decay target)
-    weight_decay: float = 0.1
+    min_lr: float = 6e-5       # Cosine decay target — 10× below peak is a common ratio
+    weight_decay: float = 0.1  # AdamW weight decay — 0.1 is the GPT-3/LLaMA standard
 
-    # Adam
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.95
-    adam_eps: float = 1e-8
+    # Adam hyperparameters
+    adam_beta1: float = 0.9    # Momentum — standard value, no reason to change
+    adam_beta2: float = 0.95   # Lower than default 0.999 — better for LLM training stability
+                               # (see train.py comments for full rationale)
+    adam_eps: float = 1e-8     # Numerical stability in Adam denominator
 
-    # Gradient clipping
+    # Gradient clipping — 1.0 is the universal standard for LLM pre-training
     max_grad_norm: float = 1.0
 
     # --- Mixed precision ---
-    precision: str = "auto"    # "auto", "bf16", "fp16", "fp32"
+    precision: str = "auto"    # "auto" picks bf16 if supported (Ampere+), fp16 otherwise, fp32 on CPU
 
     # --- Checkpointing ---
     checkpoint_dir: str = "checkpoints"
-    save_every_steps: int = 500        # Save checkpoint every N steps
-    keep_last_n_checkpoints: int = 5   # Keep last N + best validation
+    save_every_steps: int = 500        # Frequent saves protect against crashes mid-training
+    keep_last_n_checkpoints: int = 5   # Disk budget: keep last 5 + best validation checkpoint
     save_to_hf_hub: bool = False       # Upload checkpoints to HF Hub
     hf_repo_id: str = ""               # HF Hub repo for checkpoint backup
 
@@ -121,12 +129,13 @@ class TrainConfig:
     use_wandb: bool = True
 
     # --- Performance ---
-    num_workers: int = 4
-    use_compile: str = "auto"          # "auto", "true", "false"
-    gradient_checkpointing: bool = False  # Trade compute for memory (for 1B+ models)
+    num_workers: int = 4               # DataLoader workers for async data prefetching
+    use_compile: str = "auto"          # torch.compile: fuses operations for 10-30% speedup on CUDA
+    gradient_checkpointing: bool = False  # Trade compute for memory: recompute activations in backward
+                                          # instead of storing them. Essential for 1B+ models.
 
     # --- Reproducibility ---
-    seed: int = 42
+    seed: int = 42  # Fixed seed for deterministic initialization and data shuffling
 
     # --- Resume ---
     resume: str = ""  # "" = fresh start, "latest" = latest checkpoint, "step_5000" = specific

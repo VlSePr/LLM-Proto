@@ -10,7 +10,10 @@ from typing import List, Optional
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
 
 
-# Special tokens
+# Special tokens used by the model:
+# - bos/eos: mark sequence boundaries (critical for generation to know when to stop)
+# - pad: used to align variable-length sequences in a batch
+# - im_start/im_end: chat template markers (for fine-tuning into a chat model later)
 SPECIAL_TOKENS = {
     "bos": "<|bos|>",
     "eos": "<|eos|>",
@@ -49,18 +52,28 @@ class LLMTokenizer:
         Returns:
             Trained LLMTokenizer instance
         """
+        # BPE with byte_fallback=True: when the tokenizer encounters an unknown character
+        # (e.g., rare Unicode), it falls back to raw byte tokens (0x00–0xFF) instead of <UNK>.
+        # This guarantees the tokenizer can represent *any* input — no information is ever lost.
         tokenizer = Tokenizer(models.BPE(byte_fallback=True))
 
-        # Pre-tokenization: split on whitespace and punctuation (GPT-like)
+        # ByteLevel pre-tokenization: splits text into bytes before BPE merges.
+        # This is the GPT-2/GPT-4 approach — the tokenizer operates on UTF-8 byte sequences,
+        # making it language-agnostic (works for any script without special handling).
+        # add_prefix_space=False: don't add a leading space (we handle whitespace naturally).
         tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
 
-        # Decoder that handles byte-level encoding
+        # ByteLevel decoder reverses the byte-level encoding back to readable text
         tokenizer.decoder = decoders.ByteLevel()
 
         # Post-processing: add BOS token at start
         # (can be customized later for chat templates)
 
-        # Trainer
+        # BPE trainer: iteratively merges the most frequent byte/token pairs.
+        # min_frequency=2: a merge must occur at least twice to be learned,
+        #   preventing overfitting to typos or single-occurrence strings.
+        # initial_alphabet=ByteLevel.alphabet(): start with all 256 byte tokens
+        #   as the base vocabulary, ensuring full Unicode coverage.
         trainer = trainers.BpeTrainer(
             vocab_size=vocab_size,
             min_frequency=min_frequency,
@@ -112,7 +125,7 @@ class LLMTokenizer:
         return self.tokenizer.decode(ids)
 
     def encode_batch(self, texts: List[str], add_bos: bool = True, add_eos: bool = False) -> List[List[int]]:
-        """Batch encode multiple texts."""
+        """Batch encode multiple texts. Uses the Rust-backed parallel encoder for speed."""
         results = self.tokenizer.encode_batch(texts)
         encoded = [enc.ids for enc in results]
         if add_bos and self.bos_id is not None:

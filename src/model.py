@@ -14,45 +14,88 @@ from .config import ModelConfig
 
 
 class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization."""
+    """
+    Root Mean Square Layer Normalization.
+
+    RMSNorm is preferred over LayerNorm in modern LLMs (LLaMA, Mistral) because:
+    - It skips the mean-centering step, making it ~10-15% faster.
+    - Empirically matches LayerNorm quality for Transformer pre-training.
+    - Formula: x * rsqrt(mean(x^2) + eps) * weight
+    """
 
     def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
+        # Learnable per-channel scale (no bias — RMSNorm only re-scales, unlike LayerNorm)
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Cast to float32 for numerical stability during norm computation,
+        # then cast back to the original dtype (e.g., bf16) for the rest of the model.
         norm = x.float().pow(2).mean(-1, keepdim=True).add(self.eps).rsqrt()
         return (x.float() * norm).type_as(x) * self.weight
 
 
 def precompute_rope_freqs(dim: int, max_seq_len: int, theta: float = 10_000.0, device: torch.device = None) -> torch.Tensor:
-    """Precompute complex RoPE frequencies: e^(i * m * theta_k) for all positions m and freq indices k."""
+    """
+    Precompute complex RoPE frequencies: e^(i * m * theta_k) for all positions m and freq indices k.
+
+    RoPE (Rotary Position Embedding) encodes position by *rotating* query/key vectors
+    in 2D subspaces. Unlike absolute or learned positional embeddings:
+    - The dot product q·k naturally decays with relative distance → built-in locality bias.
+    - Generalizes to unseen sequence lengths better than learned embeddings.
+    - No extra parameters — positions are encoded via rotation matrices.
+
+    The base frequency theta=10000 controls the wavelength range:
+      lower dims rotate fast (capture local patterns), higher dims rotate slowly (long-range).
+    """
+    # theta_k = 1 / (theta^(2k/dim)) — geometric sequence of frequencies
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device).float() / dim))
+    # t = [0, 1, 2, ..., max_seq_len-1] — position indices
     t = torch.arange(max_seq_len, device=device).float()
+    # Outer product gives angles: angle[m, k] = m * theta_k
     freqs = torch.outer(t, freqs)  # (max_seq_len, dim//2)
+    # Convert to complex exponentials e^(i*angle) for efficient rotation via complex multiplication
     return torch.polar(torch.ones_like(freqs), freqs)  # complex64: (max_seq_len, dim//2)
 
 
 def apply_rope(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
     """Apply rotary positional embeddings to input tensor."""
     # x: (batch, seq_len, n_heads, head_dim)
+    # Reinterpret consecutive pairs of dims as complex numbers for rotation.
+    # E.g., head_dim=64 → 32 complex numbers per head.
     x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
     freqs = freqs[:x.shape[1]].unsqueeze(0).unsqueeze(2)  # (1, seq_len, 1, head_dim//2)
+    # Complex multiplication rotates each 2D subspace by the position-dependent angle.
+    # This is equivalent to the 2x2 rotation matrix [cos,-sin; sin,cos] but much faster.
     x_rotated = x_complex * freqs
     return torch.view_as_real(x_rotated).reshape(*x.shape).type_as(x)
 
 
 class Attention(nn.Module):
-    """Multi-head attention with Grouped Query Attention (GQA) and KV-cache support."""
+    """
+    Multi-head attention with Grouped Query Attention (GQA) and KV-cache support.
+
+    GQA (Grouped Query Attention) uses fewer KV heads than Q heads:
+    - Standard MHA: n_kv_heads == n_heads (every Q head has its own KV pair).
+    - GQA: n_kv_heads < n_heads — multiple Q heads share one KV head group.
+    - MQA: n_kv_heads == 1 (extreme sharing).
+    Benefits: drastically reduces KV-cache memory during inference (important for
+    long sequences and large batch sizes) with minimal quality loss.
+
+    All linear projections omit bias — standard in modern LLMs (LLaMA, Mistral)
+    as bias adds parameters without measurable quality improvement.
+    """
 
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.n_heads = config.n_heads
         self.n_kv_heads = config.n_kv_heads
         self.head_dim = config.head_dim
+        # How many Q heads share each KV head (e.g., 8 Q heads / 4 KV heads = 2× sharing)
         self.n_rep = self.n_heads // self.n_kv_heads  # GQA repetition factor
 
+        # Q has full n_heads projections; K and V have fewer (n_kv_heads) — this is the GQA savings
         self.wq = nn.Linear(config.dim, config.n_heads * self.head_dim, bias=False)
         self.wk = nn.Linear(config.dim, config.n_kv_heads * self.head_dim, bias=False)
         self.wv = nn.Linear(config.dim, config.n_kv_heads * self.head_dim, bias=False)
@@ -77,7 +120,9 @@ class Attention(nn.Module):
         q = apply_rope(q, rope_freqs)
         k = apply_rope(k, rope_freqs)
 
-        # KV cache for inference
+        # KV cache for inference: concatenate past keys/values with current ones.
+        # This avoids recomputing attention over the entire sequence at each generation step,
+        # reducing complexity from O(T²) to O(T) per new token.
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
             k = torch.cat([k_cache, k], dim=1)
@@ -96,12 +141,16 @@ class Attention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        # Scaled dot-product attention with Flash Attention (PyTorch 2.x)
+        # PyTorch's F.scaled_dot_product_attention automatically dispatches to:
+        #   - Flash Attention 2  (O(T) memory, fused CUDA kernel — fastest)
+        #   - Memory-efficient attention (xformers-style)
+        #   - Standard math fallback
+        # This gives us Flash Attention speed without an explicit dependency.
         out = F.scaled_dot_product_attention(
             q, k, v,
             attn_mask=mask,
             is_causal=(mask is None and kv_cache is None),  # Use causal mask for training
-            dropout_p=0.0,  # Dropout handled separately
+            dropout_p=0.0,  # Dropout handled separately for compatibility
         )
 
         # Reshape and project output
@@ -112,21 +161,44 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """SwiGLU Feed-Forward Network."""
+    """
+    SwiGLU Feed-Forward Network.
+
+    SwiGLU replaces the traditional ReLU FFN (2 matrices) with a gated design (3 matrices):
+      output = W_down * (SiLU(W_gate * x) ⊙ W_up * x)
+
+    Why SwiGLU over standard ReLU FFN?
+    - The gating mechanism (element-wise multiply of two projections) lets the network
+      learn which features to amplify or suppress, improving expressiveness.
+    - SiLU (Swish) activation is smooth and non-monotonic, avoiding ReLU's "dead neuron" problem.
+    - Empirically outperforms ReLU and GELU FFNs in LLM benchmarks (PaLM, LLaMA papers).
+    - The 3-matrix design uses 3 × dim × ffn_dim parameters instead of 2 × dim × 4×dim,
+      so ffn_dim is set to 2/3 × 4 × dim to keep total parameter count roughly equivalent.
+    """
 
     def __init__(self, config: ModelConfig):
         super().__init__()
+        # Three projections instead of two: gate, up-project, and down-project
         self.w_gate = nn.Linear(config.dim, config.ffn_dim, bias=False)
         self.w_up = nn.Linear(config.dim, config.ffn_dim, bias=False)
         self.w_down = nn.Linear(config.ffn_dim, config.dim, bias=False)
         self.dropout = nn.Dropout(config.dropout) if config.dropout > 0 else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # SiLU(gate) acts as a learned soft switch; up-project provides the values to gate
         return self.dropout(self.w_down(F.silu(self.w_gate(x)) * self.w_up(x)))
 
 
 class TransformerBlock(nn.Module):
-    """Pre-norm Transformer block: RMSNorm → Attention → residual → RMSNorm → FFN → residual."""
+    """
+    Pre-norm Transformer block: RMSNorm → Attention → residual → RMSNorm → FFN → residual.
+
+    Pre-norm (normalize before sublayer) is used instead of post-norm because:
+    - Training is more stable, especially for deep models (24+ layers).
+    - Gradients flow more directly through the residual stream.
+    - Removes the need for careful learning rate warmup that post-norm requires.
+    All modern LLMs (GPT-3, LLaMA, Mistral, Gemma) use pre-norm.
+    """
 
     def __init__(self, config: ModelConfig):
         super().__init__()
@@ -164,10 +236,16 @@ class TransformerLM(nn.Module):
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
+        # Weight tying: share the embedding matrix with the output projection.
+        # This reduces parameters by vocab_size × dim (e.g., 32K × 512 = 16M params saved)
+        # and provides a useful inductive bias — tokens with similar embeddings produce
+        # similar output logits, which improves convergence in practice.
         if config.tie_embeddings:
             self.output.weight = self.tok_emb.weight
 
-        # Precompute RoPE frequencies (registered as buffer — moves with model)
+        # Precompute RoPE frequencies once and register as a non-persistent buffer.
+        # "Non-persistent" means they won't be saved in state_dict (recomputed on load),
+        # but they will move to the correct device (CPU/GPU) with the model.
         rope_freqs = precompute_rope_freqs(config.head_dim, config.max_seq_len, config.rope_theta)
         self.register_buffer("rope_freqs", rope_freqs, persistent=False)
 
@@ -175,7 +253,13 @@ class TransformerLM(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        """Initialize weights following GPT-2 / LLaMA conventions."""
+        """
+        Initialize weights following GPT-2 / LLaMA conventions.
+
+        std=0.02 is the standard init for Transformers (from GPT-2).
+        It keeps activations in a reasonable range at init, preventing
+        vanishing/exploding signals before training begins.
+        """
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -184,7 +268,11 @@ class TransformerLM(nn.Module):
             elif isinstance(module, nn.Embedding):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-        # Scale residual projections by 1/sqrt(2*n_layers) for stability
+        # Scale residual projections (wo and w_down) by 1/sqrt(2*n_layers).
+        # Each layer adds to the residual stream, so with N layers the variance
+        # would grow ~N× without scaling. The factor 2 accounts for two residual
+        # additions per block (attention + FFN). This is the GPT-2 convention,
+        # also used in LLaMA and Megatron-LM.
         for layer in self.layers:
             nn.init.normal_(layer.attn.wo.weight, mean=0.0,
                             std=0.02 / math.sqrt(2 * self.config.n_layers))
@@ -265,16 +353,20 @@ class TransformerLM(nn.Module):
 
             logits = out["logits"][:, -1, :]  # (B, vocab_size)
 
-            # Temperature
+            # Temperature controls randomness: <1 = more deterministic, >1 = more creative.
+            # It scales logits before softmax: lower temp → sharper distribution → less surprise.
             if temperature > 0:
                 logits = logits / temperature
 
-                # Top-k filtering
+                # Top-k: keep only the k most likely tokens, zero out the rest.
+                # Prevents sampling from the long tail of unlikely tokens.
                 if top_k > 0:
                     top_k_vals, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                     logits[logits < top_k_vals[:, -1:]] = float("-inf")
 
-                # Top-p (nucleus) filtering
+                # Top-p (nucleus) filtering: keep the smallest set of tokens whose
+                # cumulative probability ≥ top_p. Adapts dynamically — when the model
+                # is confident, fewer tokens are kept; when uncertain, more are allowed.
                 if top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
                     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)

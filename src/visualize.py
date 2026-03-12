@@ -8,8 +8,9 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 import matplotlib
-# Use non-interactive backend only when there's no display (headless servers).
-# In notebooks / interactive sessions, let matplotlib pick the right backend.
+# Use the non-interactive "Agg" backend on headless servers (vast.ai, remote SSH)
+# so matplotlib renders to in-memory buffers instead of trying to open a window.
+# In notebooks/Colab the interactive backend is auto-detected via IPython modules.
 if not any(k in sys.modules for k in ("IPython", "ipykernel", "google.colab")):
     try:
         matplotlib.use("Agg")
@@ -33,6 +34,9 @@ def plot_attention_heatmap(
 ) -> plt.Figure:
     """
     Visualize attention weights for a specific layer and head.
+    Diagnostic purpose: reveals what the model "looks at" when predicting
+    each token — early layers often attend locally; deeper layers show
+    long-range or semantic patterns.
     Returns a matplotlib figure.
     """
     model.eval()
@@ -112,8 +116,10 @@ def plot_embedding_space(
     method: str = "tsne",
 ) -> plt.Figure:
     """
-    Visualize token embedding space using t-SNE or UMAP.
-    Shows the top N most common tokens.
+    Visualize token embedding space using t-SNE (or UMAP).
+    Diagnostic purpose: well-trained embeddings cluster semantically similar
+    tokens (e.g., digits together, punctuation together). Uniform blobs
+    suggest undertrained embeddings.
     """
     model.eval()
     embeddings = model.tok_emb.weight.detach().cpu().numpy()
@@ -126,6 +132,8 @@ def plot_embedding_space(
 
     if method == "tsne":
         from sklearn.manifold import TSNE
+        # perplexity ≈ "effective number of neighbors"; must be < n_samples.
+        # 30 is the default/sweet spot; we clamp to n_tokens-1 for small datasets.
         reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, n_tokens - 1))
     else:
         from sklearn.manifold import TSNE
@@ -149,7 +157,12 @@ def plot_embedding_space(
 
 
 def plot_weight_distributions(model: TransformerLM) -> plt.Figure:
-    """Plot weight distribution histograms for each layer type."""
+    """
+    Plot weight standard deviations grouped by layer type.
+    Diagnostic purpose: large std disparity across layers may indicate
+    exploding/vanishing gradients or poor initialization. All stds should
+    be roughly similar for a well-conditioned model.
+    """
     weight_stats = {}
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -204,7 +217,9 @@ def plot_activation_stats(
 ) -> plt.Figure:
     """
     Plot mean and std of activations per layer.
-    Helps detect dead neurons or saturation.
+    Diagnostic purpose: means drifting away from 0 suggest normalization issues;
+    shrinking stds ("activation collapse") or growing stds ("activation explosion")
+    indicate training instability. RMSNorm + pre-norm should keep these stable.
     """
     model.eval()
     device = next(model.parameters()).device
@@ -250,6 +265,9 @@ def plot_token_loss_heatmap(
 ) -> plt.Figure:
     """
     Per-token loss heatmap: shows which tokens are hardest to predict.
+    Diagnostic purpose: function words ("the", "is") should have low loss;
+    content words or rare tokens will have high loss. Patterns here reveal
+    whether the model has learned syntax vs. semantics.
     """
     model.eval()
     device = next(model.parameters()).device
@@ -285,7 +303,12 @@ def plot_token_loss_heatmap(
 
 
 def plot_gradient_norms(grad_norms_by_layer: dict) -> plt.Figure:
-    """Plot gradient norms per layer. Input: {layer_name: norm_value}."""
+    """
+    Plot gradient L2 norms per layer.
+    Diagnostic purpose: near-zero gradients signal vanishing gradient layers;
+    very large norms indicate potential exploding gradients. Gradient clipping
+    should cap these at the configured threshold (typically 1.0).
+    """
     names = list(grad_norms_by_layer.keys())
     values = list(grad_norms_by_layer.values())
 

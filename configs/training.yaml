@@ -35,8 +35,8 @@ save_every_steps: 500
 keep_last_n_checkpoints: 5
 
 # --- Google Drive backup ---
-backup_to_gdrive: false
-gdrive_folder_id: ''              # Target folder ID from Drive URL
+backup_to_gdrive: true
+gdrive_folder_id: 'LLM'           # Colab: folder name under MyDrive. Local: real Drive folder ID from URL.
 gdrive_credentials_path: ''       # Path to service-account JSON (empty = default creds)
 gdrive_cleanup_remote: true       # Mirror keep_last_n on remote
 
@@ -60,7 +60,7 @@ gradient_checkpointing: false
 seed: 42
 
 # --- Resume ---
-resume: ''            # '' | latest | best | step_N
+resume: 'Large'       # '' | latest | best | step_N | custom name (e.g. 'Large' → Large.pt)
 
 # --- Sample prompts ---
 sample_prompts:

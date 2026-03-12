@@ -38,12 +38,15 @@ def compute_val_metrics(
         with amp_ctx:
             out = model(input_ids, targets=targets)
 
-        # Per-token loss for accurate perplexity
+        # Use reduction="sum" (not "mean") to get the true per-token loss.
+        # "mean" would average over each batch independently, weighting shorter
+        # sequences equally with longer ones. "sum" lets us accumulate total loss
+        # and total token count, then divide once for an exact global average.
         logits = out["logits"]
         loss_flat = F.cross_entropy(
             logits.view(-1, logits.size(-1)),
             targets.view(-1),
-            ignore_index=-1,
+            ignore_index=-1,   # Skip padding tokens (target=-1) so they don't dilute the loss
             reduction="sum",
         )
         n_valid = (targets != -1).sum().item()
@@ -52,6 +55,9 @@ def compute_val_metrics(
         n_batches += 1
 
     avg_loss = total_loss / max(total_tokens, 1)
+    # Perplexity = exp(avg_loss). Intuitively, it's the effective vocabulary size
+    # the model is "confused" among per token. Lower is better.
+    # Clamp avg_loss at 20 to avoid exp(>20) overflow (~485 million).
     perplexity = math.exp(min(avg_loss, 20))
 
     return {
