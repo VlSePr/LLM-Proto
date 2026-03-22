@@ -29,9 +29,15 @@ processing:
 #   text_field — JSON key containing the text (default: "text")
 
 sources:
+#  - type: huggingface
+#    name: HuggingFaceFW/fineweb-edu
+#    subset: sample-10BT
+#    split: train
+#    text_field: text
+#    weight: 1.0
+
   - type: huggingface
-    name: HuggingFaceFW/fineweb-edu
-    subset: sample-10BT
+    name: hakatiki/guttenberg-books-corpus
     split: train
     text_field: text
     weight: 1.0
