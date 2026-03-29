@@ -49,16 +49,16 @@ sources:
   #   weight: 1.0
 
   # ── Google Drive data (Colab only) ─────────────────────────
-  # Mount happens automatically. Put .txt or .jsonl files in a
-  # Drive folder, then point to it below.
+  # 1. Set ENABLE_GDRIVE = True and GDRIVE_DATA_DIR = "my-books" in Cell 2.
+  # 2. Cell 2b will mount Drive at /content/drive/MyDrive/
+  # 3. Uncomment the entry below and set the path to match your GDRIVE_DATA_DIR.
   #
-  # For .txt files:
   # - type: text_dir
-  #   path: /content/drive/MyDrive/my-training-data/txt
+  #   path: /content/drive/MyDrive/my-books   # match GDRIVE_DATA_DIR in Cell 2
   #   weight: 1.0
   #
-  # For .jsonl files:
+  # For .jsonl files on Drive:
   # - type: jsonl
-  #   path: /content/drive/MyDrive/my-training-data/jsonl
+  #   path: /content/drive/MyDrive/my-books
   #   text_field: text
   #   weight: 1.0
