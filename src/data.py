@@ -84,18 +84,32 @@ def _iter_huggingface(source: Dict[str, Any]) -> Iterator[str]:
 
 
 def _iter_text_dir(source: Dict[str, Any]) -> Iterator[str]:
-    """Yield texts from .txt files in a directory (recursive)."""
+    """Yield texts from files in a directory (recursive).
+
+    Reads all non-hidden files regardless of extension, so extension-less
+    books (e.g. ``alice-in-wonderland``) are included alongside ``*.txt``.
+    """
     path = source["path"]
     if not os.path.isdir(path):
+        abs_path = os.path.abspath(path)
         print(f"  Warning: text_dir path does not exist: {path}")
+        print(f"    (resolved to: {abs_path}, cwd: {os.getcwd()})")
         return
 
-    txt_files = sorted(glob.glob(os.path.join(path, "**", "*.txt"), recursive=True))
-    print(f"  Found {len(txt_files)} .txt files in {path}")
+    all_files = []
+    for root, _, files in os.walk(path):
+        for fname in sorted(files):
+            if not fname.startswith("."):
+                all_files.append(os.path.join(root, fname))
+    all_files.sort()
+    print(f"  Found {len(all_files)} files in {path}")
 
-    for fpath in txt_files:
-        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read().strip()
+    for fpath in all_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read().strip()
+        except (IOError, OSError):
+            continue
         if text and len(text) >= 50:
             yield text
 
