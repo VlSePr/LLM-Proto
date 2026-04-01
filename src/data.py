@@ -409,6 +409,9 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
         self.total_tokens = sum(os.path.getsize(f) // 2 for f in shard_files)
         self.n_samples_approx = max(0, (self.total_tokens - 1) // seq_len)
 
+    def __len__(self) -> int:
+        return self.n_samples_approx
+
     def set_epoch(self, epoch: int) -> None:
         """Advance the epoch counter to change shard shuffle order.
 
