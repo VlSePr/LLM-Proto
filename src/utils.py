@@ -128,6 +128,7 @@ def save_checkpoint(
     train_config: TrainConfig,
     checkpoint_dir: str,
     is_best: bool = False,
+    **kwargs,
 ):
     """
     Save a full training checkpoint.
@@ -137,6 +138,7 @@ def save_checkpoint(
 
     checkpoint = {
         "step": step,
+        "epoch": kwargs.get("epoch", 0),
         "loss": loss,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),

@@ -259,20 +259,28 @@ def tokenize_and_save(
             val_buffer.extend(ids)
             val_tokens += len(ids)
         else:
-            for token_id in ids:
-                buffer[buf_pos] = token_id
-                buf_pos += 1
-                token_count += 1
-
+            ids_arr = np.array(ids, dtype=np.uint16)
+            # Clip to remaining token budget before writing
+            if max_tokens:
+                ids_arr = ids_arr[: max(0, max_tokens - token_count)]
+            # Vectorised fill: write token blocks into the buffer, flushing
+            # complete shards to disk as each one fills up.  This replaces a
+            # Python for-loop over individual tokens, which is ~50–100× slower
+            # for long documents (numpy slice assignment is a single C memcpy).
+            pos = 0
+            while pos < len(ids_arr):
+                space = shard_size - buf_pos
+                take = min(len(ids_arr) - pos, space)
+                buffer[buf_pos : buf_pos + take] = ids_arr[pos : pos + take]
+                buf_pos += take
+                token_count += take
+                pos += take
                 if buf_pos >= shard_size:
                     shard_path = os.path.join(output_dir, f"train_{shard_idx:04d}.bin")
                     buffer[:buf_pos].tofile(shard_path)
                     print(f"  Saved {shard_path} ({buf_pos:,} tokens)")
                     shard_idx += 1
                     buf_pos = 0
-
-                if max_tokens and token_count >= max_tokens:
-                    break
 
         if max_tokens and token_count >= max_tokens:
             break
@@ -327,25 +335,151 @@ class ShardedTokenDataset(Dataset):
         self.shard_lengths = [len(s) for s in self.shards]
         self.total_tokens = sum(self.shard_lengths)
 
-        # Build index: for each sample idx, which shard and offset?
+        # Build index using compact numpy arrays instead of a Python list of tuples.
+        # At 1B tokens / seq_len=1024 ≈ 1M samples:
+        #   list-of-tuples  ≈ 56 MB  (56 bytes per CPython tuple of two ints)
+        #   numpy int32 pair ≈  8 MB  (4+4 bytes per entry)  → 7× smaller
+        # numpy also gives faster random-index lookup (C array vs. pointer-chased heap).
+        shard_idx_list = []
+        offset_list = []
         self.n_samples = 0
-        self.shard_offsets = []  # (shard_idx, start_offset) for each sample
         for si, shard in enumerate(self.shards):
             n = (len(shard) - 1) // seq_len
-            for j in range(n):
-                self.shard_offsets.append((si, j * seq_len))
+            if n == 0:
+                continue
+            shard_idx_list.append(np.full(n, si, dtype=np.int32))
+            offset_list.append(np.arange(n, dtype=np.int32) * seq_len)
             self.n_samples += n
+        if self.n_samples > 0:
+            self._shard_idx = np.concatenate(shard_idx_list)  # (N,) int32
+            self._offsets   = np.concatenate(offset_list)     # (N,) int32
+        else:
+            self._shard_idx = np.empty(0, dtype=np.int32)
+            self._offsets   = np.empty(0, dtype=np.int32)
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, idx):
-        shard_idx, offset = self.shard_offsets[idx]
-        chunk = self.shards[shard_idx][offset:offset + self.seq_len + 1].astype(np.int64)
+        shard_idx = int(self._shard_idx[idx])
+        offset    = int(self._offsets[idx])
+        chunk     = self.shards[shard_idx][offset : offset + self.seq_len + 1].astype(np.int64)
+        return torch.from_numpy(chunk[:-1]), torch.from_numpy(chunk[1:])
 
-        input_ids = torch.from_numpy(chunk[:-1])
-        targets = torch.from_numpy(chunk[1:])
-        return input_ids, targets
+
+class IterableShardDataset(torch.utils.data.IterableDataset):
+    """
+    Streaming iterable dataset for multi-shard binary token files.
+
+    Designed for training on billions of tokens without ever materialising a
+    per-sample index in RAM.  Key differences from ``ShardedTokenDataset``:
+
+    * **Zero index memory** — no ``(shard_idx, offset)`` table is built.
+      Memory footprint is a fixed constant regardless of dataset size.
+    * **Shard-level shuffle** — shard order is randomised each epoch via an
+      epoch-seeded RNG, ensuring the model sees data in a different global
+      order every epoch.  Call :meth:`set_epoch` before each epoch.
+    * **Sequential shard reads** — each shard is consumed end-to-end, which
+      is optimal for memory-mapped files (sequential page-faults < random seeks).
+    * **Shuffle buffer** — a small fixed-size reservoir provides fine-grained
+      sample randomness without requiring a full global permutation.
+      Effective shuffle window ≈ ``shuffle_buffer_size × seq_len`` tokens.
+    * **Worker-aware** — when ``num_workers > 0``, each DataLoader worker
+      receives a disjoint slice of the shard list so every token is seen
+      exactly once per epoch and no work is duplicated across workers.
+    """
+
+    def __init__(
+        self,
+        shard_files: List[str],
+        seq_len: int,
+        shuffle_shards: bool = True,
+        shuffle_buffer_size: int = 1_000,
+        seed: int = 42,
+    ):
+        self.shard_files = list(shard_files)
+        self.seq_len = seq_len
+        self.shuffle_shards = shuffle_shards
+        self.shuffle_buffer_size = shuffle_buffer_size
+        self.seed = seed
+        self._epoch = 0
+
+        # Estimate total tokens / samples without loading any data.
+        # os.path.getsize is a fast syscall; uint16 = 2 bytes per token.
+        self.total_tokens = sum(os.path.getsize(f) // 2 for f in shard_files)
+        self.n_samples_approx = max(0, (self.total_tokens - 1) // seq_len)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Advance the epoch counter to change shard shuffle order.
+
+        Call before each training epoch so the model sees shards in a
+        different order every time::
+
+            for epoch in range(n_epochs):
+                dataset.set_epoch(epoch)
+                for batch in loader:
+                    ...
+        """
+        self._epoch = epoch
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+
+        # Shard-level shuffle: deterministic but different each epoch.
+        rng = np.random.default_rng(self.seed + self._epoch)
+        shard_files = list(self.shard_files)
+        if self.shuffle_shards:
+            rng.shuffle(shard_files)
+
+        # Worker-aware shard splitting: worker i reads shards i, i+W, i+2W, …
+        # This gives disjoint, full coverage with no inter-worker coordination.
+        if worker_info is not None:
+            shard_files = shard_files[worker_info.id :: worker_info.num_workers]
+
+        # Per-worker shuffle-buffer RNG — different seed per worker per epoch
+        # so workers don't produce the same random order.
+        worker_id = worker_info.id if worker_info is not None else 0
+        buf_rng = np.random.default_rng(
+            self.seed + self._epoch * 10_000 + worker_id
+        )
+        buf: List = []
+        buf_size = self.shuffle_buffer_size
+
+        for shard_path in shard_files:
+            data = np.memmap(shard_path, dtype=np.uint16, mode="r")
+            n_samples = (len(data) - 1) // self.seq_len
+            if n_samples == 0:
+                continue  # shard too small for a full sequence — skip safely
+
+            for i in range(n_samples):
+                start = i * self.seq_len
+                # Read seq_len+1 tokens; the extra token is the next-token target
+                # for position seq_len-1.  The .astype copy detaches from the mmap
+                # so the numpy array can be safely used after the shard is closed.
+                chunk = data[start : start + self.seq_len + 1].astype(np.int64)
+                sample = (
+                    torch.from_numpy(chunk[:-1]),  # input_ids  (seq_len,)
+                    torch.from_numpy(chunk[1:]),   # targets    (seq_len,)
+                )
+
+                if buf_size <= 1:
+                    # No shuffle buffer: yield directly (deterministic order)
+                    yield sample
+                    continue
+
+                buf.append(sample)
+                if len(buf) >= buf_size:
+                    # Reservoir emit: swap a random slot with the last element
+                    # and pop — O(1), no list reallocation.
+                    idx = int(buf_rng.integers(len(buf)))
+                    yield buf[idx]
+                    buf[idx] = buf[-1]
+                    buf.pop()
+
+        # Flush remaining buffer in a random order
+        if buf:
+            for idx in buf_rng.permutation(len(buf)):
+                yield buf[int(idx)]
 
 
 def create_dataloader(
@@ -355,17 +489,79 @@ def create_dataloader(
     split: str = "train",
     num_workers: int = 4,
     shuffle: bool = True,
+    shuffle_buffer_size: int = 1_000,
+    seed: int = 42,
 ) -> DataLoader:
-    """Create a DataLoader from tokenized binary shards."""
-    dataset = ShardedTokenDataset(data_dir, seq_len, split)
-    print(f"Created {split} DataLoader: {dataset.n_samples:,} samples, "
-          f"{dataset.total_tokens:,} tokens")
+    """Create a DataLoader from tokenized binary shards.
 
+    For the *train* split this returns a streaming :class:`IterableShardDataset`
+    that shuffles at shard granularity and uses a shuffle buffer for fine-grained
+    randomness — no global index, so memory cost is constant regardless of how
+    many tokens are on disk.  The map-style :class:`ShardedTokenDataset` is kept
+    for the *val* split (deterministic, single-file).
+
+    Args:
+        data_dir: Directory containing ``train_NNNN.bin`` and ``val.bin`` shards.
+        seq_len: Sequence length (tokens per sample).
+        batch_size: Samples per batch.
+        split: ``"train"`` or ``"val"``.
+        num_workers: DataLoader worker processes.  Use 0 for notebooks / debugging.
+            For production training 2–4 workers are recommended.
+        shuffle: Shuffle shard order each epoch and apply the shuffle buffer
+            (train only; always ``False`` for val).
+        shuffle_buffer_size: Samples held in the in-memory reservoir shuffle
+            buffer.  1_000 ≈ 1–4 MB; raise to 10_000 for better randomness.
+        seed: Base RNG seed for reproducible shuffling.
+    """
+    if split == "val":
+        dataset = ShardedTokenDataset(data_dir, seq_len, split="val")
+        print(f"Created val DataLoader: {dataset.n_samples:,} samples, "
+              f"{dataset.total_tokens:,} tokens")
+        _pin = torch.cuda.is_available()
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=_pin,           # page-lock host RAM only when a GPU is present
+            pin_memory_device="cuda" if _pin else "",
+            drop_last=True,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=2 if num_workers > 0 else None,
+        )
+
+    # ── Train split: streaming IterableShardDataset ──
+    shard_files = sorted([
+        os.path.join(data_dir, f)
+        for f in os.listdir(data_dir)
+        if f.startswith("train_") and f.endswith(".bin")
+    ])
+    shard_files = [f for f in shard_files if os.path.exists(f)]
+    if not shard_files:
+        raise FileNotFoundError(f"No train shards found in {data_dir}")
+
+    dataset = IterableShardDataset(
+        shard_files,
+        seq_len,
+        shuffle_shards=shuffle,
+        shuffle_buffer_size=shuffle_buffer_size if shuffle else 0,
+        seed=seed,
+    )
+    print(
+        f"Created train DataLoader (streaming): "
+        f"~{dataset.n_samples_approx:,} samples, "
+        f"{dataset.total_tokens:,} tokens across {len(shard_files)} shard(s)"
+    )
+    _pin = torch.cuda.is_available()
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle if split == "train" else False,
         num_workers=num_workers,
-        pin_memory=True,   # Pre-copy data to CUDA-pinned RAM for faster GPU transfers
-        drop_last=True,    # Drop incomplete last batch to keep batch size consistent
+        pin_memory=_pin,           # page-lock host RAM only when a GPU is present
+        pin_memory_device="cuda" if _pin else "",
+        drop_last=True,
+        # No persistent_workers for the train iterable: the DataLoader is recreated
+        # each epoch (so set_epoch reaches fresh workers).  persistent_workers would
+        # keep stale worker copies that never see the updated epoch seed.
+        prefetch_factor=2 if num_workers > 0 else None,
     )
