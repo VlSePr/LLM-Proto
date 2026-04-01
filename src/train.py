@@ -6,6 +6,7 @@ Works seamlessly in Colab, vast.ai, and local environments.
 """
 
 import os
+import gc
 import sys
 import time
 import math
@@ -50,10 +51,10 @@ def train(
         model = torch.compile(model)
 
     if train_config.gradient_checkpointing:
-        from torch.utils.checkpoint import checkpoint
-        # Enable gradient checkpointing by wrapping layer forward calls
-        # (handled via custom forward wrapper below, not a built-in flag)
-        print("Gradient checkpointing enabled.")
+        # Wire up gradient checkpointing now that the model is built.
+        # This is the primary tool for freeing VRAM headroom before adding
+        # expert layers: saves ~60% activation memory at cost of ~33% compute.
+        model.enable_gradient_checkpointing()
 
     # ── Optimizer ──
     # Separate parameters into two groups:
@@ -191,31 +192,51 @@ def train(
         # Instead of one big batch, process N micro-batches, accumulate gradients,
         # then do a single optimizer step. This is essential when the target effective
         # batch size doesn't fit in GPU memory (e.g., batch=32 × accum=4 = 128 effective).
-        optimizer.zero_grad(set_to_none=True)  # set_to_none=True saves memory vs zeroing
-        accum_loss = 0.0
 
-        for micro_step in range(train_config.gradient_accumulation_steps):
-            # Get next batch (cycle if exhausted)
+        # Buffer all micro-batches for this step BEFORE running any forward passes.
+        # This allows OOM retry: if any micro-step runs OOM we can replay the exact
+        # same data with a shorter sequence cap rather than silently skipping batches.
+        micro_batches = []
+        for _ in range(train_config.gradient_accumulation_steps):
             try:
                 input_ids, targets = next(train_iter)
             except StopIteration:
                 train_iter = iter(train_loader)
                 input_ids, targets = next(train_iter)
+            micro_batches.append((input_ids, targets))
 
-            input_ids = input_ids.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-
-            with amp_ctx:
-                out = model(input_ids, targets=targets)
-                # Divide loss by accumulation steps so that the *sum* of micro-batch gradients
-                # equals the gradient of the full effective batch (mathematically equivalent
-                # to computing loss over the entire effective batch at once).
-                loss = out["loss"] / train_config.gradient_accumulation_steps
-
-            # scaler.scale() multiplies loss by a dynamic scale factor (fp16 only)
-            # to prevent gradient underflow. backward() accumulates into .grad.
-            scaler.scale(loss).backward()
-            accum_loss += loss.item()
+        # OOM-safe accumulation: retry the entire step with a shorter sequence cap
+        # if CUDA runs out of memory.  Each retry shrinks the cap by 25% until it
+        # either succeeds or hits train_config.min_seq_len.
+        seq_cap = model_config.max_seq_len
+        oom_retries = 0
+        while True:
+            optimizer.zero_grad(set_to_none=True)
+            accum_loss = 0.0
+            try:
+                for ids, tgts in micro_batches:
+                    ids  = ids[:, :seq_cap].to(device, non_blocking=True)
+                    tgts = tgts[:, :seq_cap].to(device, non_blocking=True)
+                    with amp_ctx:
+                        out  = model(ids, targets=tgts)
+                        # Divide loss by accumulation steps so the sum of micro-batch
+                        # gradients equals the gradient of the full effective batch.
+                        loss = out["loss"] / train_config.gradient_accumulation_steps
+                    scaler.scale(loss).backward()
+                    accum_loss += loss.item()
+                break  # all micro-steps succeeded
+            except torch.cuda.OutOfMemoryError:
+                gc.collect()
+                torch.cuda.empty_cache()
+                new_cap = max(train_config.min_seq_len, seq_cap * 3 // 4)
+                if new_cap == seq_cap:
+                    raise RuntimeError(
+                        f"OOM at step {step} even with minimum seq_len={seq_cap}. "
+                        "Enable gradient_checkpointing or reduce batch_size."
+                    )
+                oom_retries += 1
+                seq_cap = new_cap
+                print(f"  ⚠ OOM at step {step} — retry {oom_retries} with seq_cap={seq_cap}")
 
         # Gradient clipping: cap the global L2 norm of all gradients to prevent
         # exploding gradients, which can destabilize training (especially early on

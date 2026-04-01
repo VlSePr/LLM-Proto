@@ -133,6 +133,8 @@ class TrainConfig:
     use_compile: str = "auto"          # torch.compile: fuses operations for 10-30% speedup on CUDA
     gradient_checkpointing: bool = False  # Trade compute for memory: recompute activations in backward
                                           # instead of storing them. Essential for 1B+ models.
+    min_seq_len: int = 256             # OOM safety floor: never truncate sequences below this length.
+                                       # Shorter sequences lose enough context to hurt gradient quality.
 
     # --- Reproducibility ---
     seed: int = 42  # Fixed seed for deterministic initialization and data shuffling

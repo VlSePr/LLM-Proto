@@ -8,6 +8,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as torch_checkpoint
 from typing import Optional, Tuple
 
 from .config import ModelConfig
@@ -206,6 +207,19 @@ class TransformerBlock(nn.Module):
         self.attn = Attention(config)
         self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.ffn = FeedForward(config)
+        # Set to True via TransformerLM.enable_gradient_checkpointing().
+        # Never set directly — use the model-level helper.
+        self._use_gradient_checkpointing: bool = False
+
+    def _run(self, x: torch.Tensor, rope_freqs: torch.Tensor,
+             mask: Optional[torch.Tensor],
+             kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]]
+             ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """Actual forward computation, separated so checkpointing can wrap it."""
+        h, new_kv = self.attn(self.attn_norm(x), rope_freqs, mask, kv_cache)
+        x = x + h
+        x = x + self.ffn(self.ffn_norm(x))
+        return x, new_kv
 
     def forward(
         self,
@@ -214,10 +228,27 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor] = None,
         kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        h, new_kv = self.attn(self.attn_norm(x), rope_freqs, mask, kv_cache)
-        x = x + h
-        x = x + self.ffn(self.ffn_norm(x))
-        return x, new_kv
+        # Gradient checkpointing: instead of storing all intermediate activations
+        # for the backward pass, discard them during forward and recompute as needed.
+        # Saves ~60% activation memory at cost of ~33% extra compute (one extra
+        # forward pass per layer).  Essential for 1B+ models near VRAM limits,
+        # and required before adding expert layers (MoE).
+        #
+        # KV-cache is incompatible with checkpointing (it is only used at inference,
+        # where we call model.eval() which effectively disables checkpointing anyway).
+        if self._use_gradient_checkpointing and kv_cache is None:
+            # torch.utils.checkpoint requires all inputs that need gradients to be
+            # positional tensor arguments.  rope_freqs is a buffer (no grad) but
+            # must still be passed so the recompute sees it.  mask is None during
+            # standard causal training.  use_reentrant=False is the modern,
+            # composable path that works correctly with torch.compile and autocast.
+            def ckpt_fn(x: torch.Tensor, rope_freqs: torch.Tensor) -> torch.Tensor:
+                h, _ = self.attn(self.attn_norm(x), rope_freqs, mask=mask, kv_cache=None)
+                x = x + h
+                x = x + self.ffn(self.ffn_norm(x))
+                return x
+            return torch_checkpoint.checkpoint(ckpt_fn, x, rope_freqs, use_reentrant=False), None
+        return self._run(x, rope_freqs, mask, kv_cache)
 
 
 class TransformerLM(nn.Module):
@@ -251,6 +282,23 @@ class TransformerLM(nn.Module):
 
         # Initialize weights
         self._init_weights()
+
+    def enable_gradient_checkpointing(self) -> None:
+        """Enable activation checkpointing on every TransformerBlock.
+
+        Trades ~33% extra compute for ~60% reduction in activation memory.
+        Call before training when VRAM is near its limit (e.g., before adding
+        expert layers).  Automatically a no-op at inference (kv_cache is set).
+        """
+        for layer in self.layers:
+            layer._use_gradient_checkpointing = True
+        print(f"Gradient checkpointing ENABLED on {len(self.layers)} layers")
+
+    def disable_gradient_checkpointing(self) -> None:
+        """Disable activation checkpointing (restore full-speed forward pass)."""
+        for layer in self.layers:
+            layer._use_gradient_checkpointing = False
+        print(f"Gradient checkpointing DISABLED")
 
     def _init_weights(self):
         """
