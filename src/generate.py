@@ -78,9 +78,20 @@ def generate_text(
         )
 
     text = tokenizer.decode(output_ids[0].tolist())
-    # Remove special tokens like <|end|>, <|start_id|>, <|>, etc.
+    # Pass 1: fully-formed special tokens  <|end|>  <|start_header_id|>  <|>  etc.
     text = re.sub(r'<[^>]*>', '', text)
+    # Pass 2: dangling opens without closing >  e.g. <|starter  <|e_
+    text = re.sub(r'<\|[^\s>]*', '', text)
+    # Pass 3: dangling closes — optionally preceded by a word fragment
+    #   catches:  |end|>   e|end|>   assistant_header_head|end|>   assistant_id|end|end|>
+    #   pattern:  optional word-chars  PIPE  one-or-more (word-chars or PIPE)  >
+    text = re.sub(r'[a-zA-Z_0-9]*\|[a-zA-Z_0-9|]+>', '', text)
+    # Pass 4: collapse runs of blank lines left by removals (3+ → 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Pass 5: collapse multiple spaces
+    text = re.sub(r' +', ' ', text).strip()
     return text
+
 
 
 def interactive_chat(
