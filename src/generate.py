@@ -5,6 +5,7 @@ Uses KV-cache for efficient autoregressive generation.
 """
 
 import os
+import re
 import torch
 
 from .config import ModelConfig, get_model_config, load_model_config
@@ -76,7 +77,10 @@ def generate_text(
             eos_token_id=tokenizer.eos_id,
         )
 
-    return tokenizer.decode(output_ids[0].tolist())
+    text = tokenizer.decode(output_ids[0].tolist())
+    # Remove special tokens like <|end|>, <|start_id|>, <|>, etc.
+    text = re.sub(r'<[^>]*>', '', text)
+    return text
 
 
 def interactive_chat(
