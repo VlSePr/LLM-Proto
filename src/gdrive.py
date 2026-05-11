@@ -260,3 +260,113 @@ def download_from_gdrive(
 
     return local_path
 
+
+def upload_dir_to_gdrive(
+    local_dir: str,
+    folder_id: str,
+    file_ext: str = ".bin",
+    credentials_path: str = "",
+) -> list:
+    """
+    Upload all files matching *file_ext* from *local_dir* to a Google Drive folder.
+
+    Files are uploaded one by one using the existing ``upload_to_gdrive`` function,
+    which supports resumable multi-chunk uploads for large files.
+
+    Returns:
+        List of (filename, file_id_or_dest_path) tuples for each uploaded file.
+    """
+    pattern = os.path.join(local_dir, f"*{file_ext}")
+    files = sorted(glob.glob(pattern))
+    if not files:
+        print(f"  No {file_ext} files found in {local_dir}")
+        return []
+
+    results = []
+    for fpath in files:
+        fname = os.path.basename(fpath)
+        print(f"  Uploading {fname} ...", end=" ", flush=True)
+        result = upload_to_gdrive(fpath, folder_id, credentials_path=credentials_path)
+        print("done")
+        results.append((fname, result))
+
+    return results
+
+
+def download_dir_from_gdrive(
+    folder_id: str,
+    local_dir: str,
+    file_ext: str = ".bin",
+    credentials_path: str = "",
+    skip_existing: bool = True,
+) -> list:
+    """
+    Download all files matching *file_ext* from a Google Drive folder to *local_dir*.
+
+    Already-present local files are skipped by default (``skip_existing=True``),
+    so re-running this function is safe and cheap.
+
+    Returns:
+        List of local file paths that were downloaded (skipped files are excluded).
+    """
+    os.makedirs(local_dir, exist_ok=True)
+
+    # ── Colab: filesystem copy from mounted Drive ──
+    if _is_colab():
+        src_dir = _colab_folder(folder_id)
+        pattern = os.path.join(src_dir, f"*{file_ext}")
+        remote_files = sorted(glob.glob(pattern))
+        downloaded = []
+        for src in remote_files:
+            fname = os.path.basename(src)
+            dest = os.path.join(local_dir, fname)
+            if skip_existing and os.path.exists(dest):
+                print(f"  Skipping {fname} (already exists)")
+                continue
+            print(f"  Copying {fname} ...", end=" ", flush=True)
+            shutil.copy2(src, dest)
+            print("done")
+            downloaded.append(dest)
+        return downloaded
+
+    # ── API mode ──
+    import io
+    from googleapiclient.http import MediaIoBaseDownload
+
+    service = _get_service(credentials_path)
+
+    # List all files in the folder matching the extension
+    # Drive has no glob, so we fetch all non-folder files and filter by name suffix.
+    query = (
+        f"'{folder_id}' in parents "
+        f"and mimeType != 'application/vnd.google-apps.folder' "
+        f"and trashed = false"
+    )
+    resp = service.files().list(
+        q=query, fields="files(id, name)", orderBy="name"
+    ).execute()
+    remote_files = [f for f in resp.get("files", []) if f["name"].endswith(file_ext)]
+
+    if not remote_files:
+        print(f"  No {file_ext} files found in Drive folder {folder_id}")
+        return []
+
+    downloaded = []
+    for f in remote_files:
+        fname = f["name"]
+        dest = os.path.join(local_dir, fname)
+        if skip_existing and os.path.exists(dest):
+            print(f"  Skipping {fname} (already exists)")
+            continue
+        print(f"  Downloading {fname} ...", end=" ", flush=True)
+        request = service.files().get_media(fileId=f["id"])
+        with open(dest, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        print("done")
+        downloaded.append(dest)
+
+    return downloaded
+

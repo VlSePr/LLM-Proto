@@ -1,0 +1,52 @@
+# Hyperbolic tiny model — ~30M parameters with Lorentz (negative curvature) embeddings.
+# Matches model_tiny.yaml architecture for direct A/B comparison.
+#
+# Geometry notes
+# --------------
+# geometry_type: lorentz
+#   Token embeddings live on the Lorentz hyperboloid H^dim_K.
+#   Manifold constraint: -x0^2 + ||x_spatial||^2 = -1/K
+#   Phase 1: tangent projection = identity on x_spatial.
+#   Phase 2+: use LorentzEmbedding.log_map / exp_map for geodesic operations.
+#
+# curvature: 1.0
+#   Standard negative curvature K=1.  Increase to sharpen hierarchy
+#   (smaller scale), decrease to flatten (larger scale).
+#
+# embed_init_scale: 0.01
+#   Spatial coordinates are initialised with N(0, 0.01^2).
+#   With K=1 and dim=512, expected ||x||^2 = 512 * 0.0001 = 0.0512,
+#   which is well below 1/K=1.0, so the initial Lorentz x0 is well-defined.
+#   Contrast with the Euclidean baseline's std=0.02 for tok_emb.
+#
+# tie_embeddings: false
+#   Weight tying output.weight → spatial_coords.weight is enabled in the model
+#   class when config.tie_embeddings=True.  Disable for Phase 1 to keep the
+#   output projection free (standard practice for small models).
+#
+# To switch to spherical embeddings (positive curvature) change:
+#   geometry_type: spherical
+#
+# To run a fully Euclidean model through hyperbolic_train.py:
+#   geometry_type: euclidean
+#   (dims must match model_tiny.yaml exactly for a fair comparison)
+#
+# Usage:
+#   python -m src.hyperbolic_train --model configs/hyperbolic_tiny.yaml \
+#       --config configs/training.yaml --no_wandb
+
+vocab_size:        32000
+dim:               512
+n_layers:          6
+n_heads:           8
+n_kv_heads:        4
+max_seq_len:       2048
+dropout:           0.0
+norm_eps:          1.0e-05
+rope_theta:        10000.0
+tie_embeddings:    false
+
+# Geometry (HyperbolicModelConfig fields — not present in base ModelConfig)
+geometry_type:     lorentz
+curvature:         1.0
+embed_init_scale:  0.01

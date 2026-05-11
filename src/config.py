@@ -205,3 +205,146 @@ def load_train_config(path: str) -> TrainConfig:
     with open(path, "r") as f:
         data = yaml.safe_load(f)
     return TrainConfig(**data)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Hyperbolic / Curved Geometry Config (Phase 1)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_VALID_GEOMETRY_TYPES = ("lorentz", "spherical", "euclidean")
+
+
+@dataclass
+class HyperbolicModelConfig(ModelConfig):
+    """
+    ModelConfig extended with curved-geometry fields.
+
+    Inherits all standard architecture parameters from ModelConfig and adds:
+
+    geometry_type : str
+        Which geometry to use for token embeddings.
+          "lorentz"    — Hyperboloid H^n_K (negative curvature).  Best for
+                         hierarchical / tree-structured token relationships.
+          "spherical"  — n-Sphere S^n_K (positive curvature).  Best for
+                         cyclic / compositional token relationships.
+          "euclidean"  — Standard nn.Embedding (flat).  Useful as a geometry-
+                         ablation baseline that goes through the same
+                         HyperbolicTransformerLM code path.
+
+    curvature : float
+        Curvature magnitude K > 0.  In both geometries the manifold "radius"
+        is 1/√K.  Recommended starting range: [0.1, 2.0].
+          - Large K → small manifold → embeddings tightly clustered near origin
+                     → stronger curvature effects, but harder to train.
+          - Small K → large manifold → nearly flat near origin
+                     → gentle curvature signal, most stable to train.
+        Phase 1 recommendation: K = 1.0.
+
+    embed_init_scale : float
+        Std-dev for spatial coordinate initialisation.
+        Must satisfy:  dim × embed_init_scale²  ≪  1/K.
+        Default 0.01 is safe for all standard model sizes up to K = 100.
+
+    tie_embeddings : bool  (inherited, default changed to False)
+        When True, output.weight is tied to spatial_coords.weight.
+        Geometrically: output logits ∝ Lorentz/spherical spatial similarity.
+        This is experimental — the output head remains Euclidean regardless,
+        so tying is an inductive bias rather than a manifold operation.
+        Default False for non-Euclidean geometry (safest baseline).
+    """
+
+    # ── geometry fields ────────────────────────────────────────────────────
+    geometry_type: str = "lorentz"
+    curvature: float = 1.0
+    embed_init_scale: float = 0.01
+
+    # Override the default so fresh HyperbolicModelConfig defaults to untied.
+    # Users can set tie_embeddings=True explicitly in YAML to experiment.
+    tie_embeddings: bool = False
+
+    def __post_init__(self):
+        # Validate geometry-specific constraints before the parent validates dims.
+        if self.geometry_type not in _VALID_GEOMETRY_TYPES:
+            raise ValueError(
+                f"geometry_type must be one of {_VALID_GEOMETRY_TYPES}, "
+                f"got '{self.geometry_type}'"
+            )
+        if self.curvature <= 0:
+            raise ValueError(
+                f"curvature must be > 0, got {self.curvature}"
+            )
+        if self.embed_init_scale <= 0:
+            raise ValueError(
+                f"embed_init_scale must be > 0, got {self.embed_init_scale}"
+            )
+        # Warn if init scale is too large relative to curvature.
+        # For spherical geometry: need dim × scale² ≪ 1/K to start on the hemisphere.
+        expected_sq_norm = self.dim * (self.embed_init_scale ** 2)
+        if expected_sq_norm >= 0.5 / self.curvature:
+            import warnings
+            warnings.warn(
+                f"HyperbolicModelConfig: expected initial ||x||² ≈ {expected_sq_norm:.4f} "
+                f"is large relative to 0.5/K = {0.5/self.curvature:.4f}. "
+                "Reduce embed_init_scale for safer training start.",
+                UserWarning,
+                stacklevel=2,
+            )
+        # Run parent validation (dim divisibility, ffn_dim computation, etc.)
+        super().__post_init__()
+
+
+# Hyperbolic preset configs — identical architecture to the Euclidean presets
+# for direct comparison, with Phase 1 recommended geometry defaults.
+HYPERBOLIC_MODEL_CONFIGS = {
+    "tiny": HyperbolicModelConfig(
+        dim=512, n_layers=6, n_heads=8, n_kv_heads=4,
+        max_seq_len=2048,
+        geometry_type="lorentz", curvature=1.0, embed_init_scale=0.01,
+    ),
+    "small": HyperbolicModelConfig(
+        dim=768, n_layers=12, n_heads=12, n_kv_heads=4,
+        max_seq_len=2048,
+        geometry_type="lorentz", curvature=1.0, embed_init_scale=0.01,
+    ),
+    "medium": HyperbolicModelConfig(
+        dim=1024, n_layers=24, n_heads=16, n_kv_heads=4,
+        max_seq_len=2048,
+        geometry_type="lorentz", curvature=1.0, embed_init_scale=0.01,
+    ),
+    "base": HyperbolicModelConfig(
+        dim=1280, n_layers=24, n_heads=20, n_kv_heads=4,
+        max_seq_len=2048,
+        geometry_type="lorentz", curvature=1.0, embed_init_scale=0.01,
+    ),
+    "large": HyperbolicModelConfig(
+        dim=2048, n_layers=32, n_heads=32, n_kv_heads=8,
+        max_seq_len=4096,
+        geometry_type="lorentz", curvature=1.0, embed_init_scale=0.01,
+    ),
+}
+
+
+def get_hyperbolic_model_config(name: str) -> HyperbolicModelConfig:
+    """Get a preset hyperbolic model config by name."""
+    if name not in HYPERBOLIC_MODEL_CONFIGS:
+        raise ValueError(
+            f"Unknown hyperbolic model config: '{name}'. "
+            f"Available: {list(HYPERBOLIC_MODEL_CONFIGS.keys())}"
+        )
+    return HYPERBOLIC_MODEL_CONFIGS[name]
+
+
+def load_hyperbolic_model_config(path: str) -> HyperbolicModelConfig:
+    """
+    Load a HyperbolicModelConfig from YAML file.
+
+    The YAML must contain all standard ModelConfig fields plus the geometry
+    extension fields (geometry_type, curvature, embed_init_scale).
+    Unknown keys are silently ignored to allow forward-compatible YAML files.
+    """
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
+    # Separate known HyperbolicModelConfig fields from unknown extras
+    valid_fields = {f.name for f in dataclasses.fields(HyperbolicModelConfig)}
+    filtered = {k: v for k, v in data.items() if k in valid_fields}
+    return HyperbolicModelConfig(**filtered)
