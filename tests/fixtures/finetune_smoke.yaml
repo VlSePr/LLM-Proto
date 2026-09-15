@@ -1,0 +1,23 @@
+# MoE fine-tuning config for the CPU smoke test (see CLAUDE.md "smoke pipeline")
+data_dir: smoke_run/data
+tokenizer_path: smoke_run/tokenizer
+checkpoint_dir: smoke_run/expert
+seq_len: 16
+batch_size: 2
+gradient_accumulation_steps: 1
+max_steps: 5
+warmup_steps: 1
+peak_lr: 1e-3
+min_lr: 1e-4
+aux_loss_coeff: 0.01
+precision: fp32
+use_compile: "false"
+num_workers: 0
+log_every_steps: 1
+eval_every_steps: 5
+eval_max_batches: 2
+save_every_steps: 5
+generate_every_steps: 1000
+visualize_every_steps: 10000
+use_wandb: false
+backup_to_gdrive: false

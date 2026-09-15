@@ -143,6 +143,11 @@ class TrainConfig:
                                           # instead of storing them. Essential for 1B+ models.
     min_seq_len: int = 256             # OOM safety floor: never truncate sequences below this length.
                                        # Shorter sequences lose enough context to hurt gradient quality.
+    seq_len: int | None = None         # Training sequence length; None = model max_seq_len.
+                                       # Fine-tuning can use less than the context the model supports.
+
+    # --- Mixture-of-Experts fine-tuning (src/moe.py, src/finetune_moe.py) ---
+    aux_loss_coeff: float = 0.01       # Weight of the router load-balance loss; ignored for dense models
 
     # --- Reproducibility ---
     seed: int = 42  # Fixed seed for deterministic initialization and data shuffling
