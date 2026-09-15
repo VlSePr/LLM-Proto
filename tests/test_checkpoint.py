@@ -2,16 +2,19 @@ import os
 import random
 
 import numpy as np
+import pytest
 import torch
 
-from src.config import TrainConfig
-from src.model import TransformerLM
+from src.config import MoEConfig, TrainConfig
+from src.model import FeedForward, TransformerLM
+from src.moe import SparseMoE, graft_moe, moe_metadata
 from src.utils import (
     build_model_from_checkpoint,
     cleanup_checkpoints,
     has_checkpoint,
     load_checkpoint,
     resolve_checkpoint_filename,
+    resolve_checkpoint_path,
     save_checkpoint,
     strip_compile_prefix,
     unwrap_model,
@@ -119,3 +122,72 @@ def test_has_checkpoint_and_cleanup(tiny_cfg, tmp_path):
     # keep_n <= 0 keeps everything
     cleanup_checkpoints(tcfg.checkpoint_dir, 0)
     assert len([f for f in os.listdir(tcfg.checkpoint_dir) if f.startswith("step_")]) == 2
+
+
+def test_resolve_checkpoint_path(tiny_cfg, tmp_path):
+    tcfg = _train_cfg(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        resolve_checkpoint_path(tcfg.checkpoint_dir, "latest")
+    path = save_checkpoint(TransformerLM(tiny_cfg), None, 3, None, tiny_cfg, tcfg, tcfg.checkpoint_dir)
+    assert resolve_checkpoint_path(tcfg.checkpoint_dir, "step_3") == path
+    assert resolve_checkpoint_path(tcfg.checkpoint_dir, "latest").endswith("latest.pt")
+
+
+def _grafted(tiny_cfg, **moe_kw):
+    model = TransformerLM(tiny_cfg)
+    graft_moe(model, MoEConfig(expert_layers=[1], **moe_kw))
+    return model
+
+
+def test_moe_checkpoint_round_trip(tiny_cfg, tmp_path, seed):
+    model = _grafted(tiny_cfg, n_experts=2, top_k=2).eval()
+    tcfg = _train_cfg(tmp_path)
+    path = save_checkpoint(model, None, 4, None, tiny_cfg, tcfg, tcfg.checkpoint_dir,
+                           extra={"moe": moe_metadata(model)})
+    raw = torch.load(path, map_location="cpu", weights_only=True)
+    assert raw["moe"] == {"expert_layers": [1], "n_experts": 2, "top_k": 2}
+
+    loaded, ckpt = build_model_from_checkpoint(path, torch.device("cpu"))
+    assert isinstance(loaded.layers[1].ffn, SparseMoE) and isinstance(loaded.layers[0].ffn, FeedForward)
+    assert loaded.layers[1].ffn.n_experts == 2 and loaded.layers[1].ffn.top_k == 2
+    ids = torch.randint(0, tiny_cfg.vocab_size, (2, 8))
+    with torch.no_grad():
+        assert torch.equal(model(ids)["logits"], loaded(ids)["logits"])
+
+    # load_checkpoint into an already-grafted model also works (training resume path)
+    fresh = _grafted(tiny_cfg, n_experts=2, top_k=2)
+    load_checkpoint(tcfg.checkpoint_dir, "latest", fresh, device=torch.device("cpu"))
+    with torch.no_grad():
+        assert torch.equal(model(ids)["logits"], fresh(ids)["logits"])
+
+
+def test_moe_checkpoint_saved_from_compiled_model(tiny_cfg, tmp_path, seed):
+    model = _grafted(tiny_cfg, n_experts=2, top_k=1)
+    tcfg = _train_cfg(tmp_path)
+    path = save_checkpoint(FakeCompiled(model), None, 1, None, tiny_cfg, tcfg, tcfg.checkpoint_dir,
+                           extra={"moe": moe_metadata(model)})
+    loaded, _ = build_model_from_checkpoint(path, torch.device("cpu"))
+    assert isinstance(loaded.layers[1].ffn, SparseMoE)
+
+    # a hand-written file with prefixed keys (older code path) loads too
+    prefixed = {"_orig_mod." + k: v for k, v in model.state_dict().items()}
+    p2 = str(tmp_path / "prefixed.pt")
+    torch.save({"model_state_dict": prefixed, "model_config": ckpt_cfg(tiny_cfg), "moe": moe_metadata(model)}, p2)
+    loaded2, _ = build_model_from_checkpoint(p2, torch.device("cpu"))
+    assert torch.equal(loaded2.layers[1].ffn.experts[1].w_up.weight, model.layers[1].ffn.experts[1].w_up.weight)
+
+
+def test_legacy_expert_checkpoint_schema_loads(tiny_cfg, tmp_path, seed):
+    """Old notebook expert_*.pt files stored n_experts/top_k/expert_layers at top level."""
+    model = _grafted(tiny_cfg, n_experts=3, top_k=2)
+    p = str(tmp_path / "expert_best.pt")
+    torch.save({"model_state_dict": model.state_dict(), "model_config": ckpt_cfg(tiny_cfg),
+                "n_experts": 3, "top_k": 2, "expert_layers": [1], "step": 9}, p)
+    loaded, ckpt = build_model_from_checkpoint(p, torch.device("cpu"))
+    assert isinstance(loaded.layers[1].ffn, SparseMoE) and loaded.layers[1].ffn.n_experts == 3
+    assert loaded.layers[1].ffn.top_k == 2 and ckpt["step"] == 9
+
+
+def ckpt_cfg(cfg):
+    from dataclasses import asdict
+    return asdict(cfg)

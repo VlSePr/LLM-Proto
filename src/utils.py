@@ -38,6 +38,18 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+def default_num_workers(max_workers: int = 4) -> int:
+    """DataLoader worker count that is safe for the current process.
+
+    Returns 0 on Windows and inside Jupyter/IPython kernels: both spawn worker
+    processes that re-import ``__main__``, which has no ``if __name__`` guard in a
+    notebook. Elsewhere returns ``max_workers``.
+    """
+    if sys.platform.startswith("win") or "ipykernel" in sys.modules:
+        return 0
+    return max_workers
+
+
 def get_dtype(precision: str = "auto") -> torch.dtype:
     """Get the compute dtype based on precision setting and hardware."""
     if precision == "bf16":
@@ -311,36 +323,17 @@ def cleanup_checkpoints(checkpoint_dir: str, keep_n: int):
         os.remove(f)
 
 
-def load_checkpoint(
+def resolve_checkpoint_path(
     checkpoint_dir: str,
     resume: str,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer | None = None,
-    device: torch.device | str = "cpu",
     gdrive_folder_id: str = "",
     gdrive_credentials_path: str = "",
-    scaler=None,
-    restore_rng: bool = True,
-) -> dict:
-    """
-    Load a checkpoint and restore model/optimizer/scaler state.
+) -> str:
+    """Local path of the checkpoint named by ``resume``, downloading it from Drive if needed.
 
-    If the checkpoint is not found locally but gdrive_folder_id is set,
-    it is downloaded from Google Drive first.
-
-    Args:
-        checkpoint_dir: Directory containing checkpoints
-        resume: "latest", "best", "step_N", or a custom name
-        model: Model to load weights into (plain or torch.compile'd)
-        optimizer: Optimizer to load state into (optional)
-        device: Device to load tensors to
-        gdrive_folder_id: Google Drive folder to fetch from (optional)
-        gdrive_credentials_path: Service-account JSON path (optional)
-        scaler: GradScaler to restore (optional)
-        restore_rng: Restore RNG states (True for training resume; False for inference)
-
-    Returns:
-        Checkpoint dict with step, loss, etc.
+    ``resume`` is ``"latest"``, ``"best"``, ``"step_N"``, a custom name, or a ``.pt``
+    filename (see ``resolve_checkpoint_filename``). Raises ``FileNotFoundError`` when
+    the file is neither local nor (with ``gdrive_folder_id``) on Google Drive.
     """
     filename = resolve_checkpoint_filename(resume)
     path = os.path.join(checkpoint_dir, filename)
@@ -361,6 +354,42 @@ def load_checkpoint(
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
+    return path
+
+
+def load_checkpoint(
+    checkpoint_dir: str,
+    resume: str,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    device: torch.device | str = "cpu",
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
+    scaler=None,
+    restore_rng: bool = True,
+) -> dict:
+    """
+    Load a checkpoint and restore model/optimizer/scaler state.
+
+    If the checkpoint is not found locally but gdrive_folder_id is set,
+    it is downloaded from Google Drive first. The model must already have the
+    right shape (for MoE checkpoints, graft first; see ``build_model_from_checkpoint``).
+
+    Args:
+        checkpoint_dir: Directory containing checkpoints
+        resume: "latest", "best", "step_N", or a custom name
+        model: Model to load weights into (plain or torch.compile'd)
+        optimizer: Optimizer to load state into (optional)
+        device: Device to load tensors to
+        gdrive_folder_id: Google Drive folder to fetch from (optional)
+        gdrive_credentials_path: Service-account JSON path (optional)
+        scaler: GradScaler to restore (optional)
+        restore_rng: Restore RNG states (True for training resume; False for inference)
+
+    Returns:
+        Checkpoint dict with step, loss, etc.
+    """
+    path = resolve_checkpoint_path(checkpoint_dir, resume, gdrive_folder_id, gdrive_credentials_path)
 
     print(f"Loading checkpoint from {path}...")
     checkpoint = load_checkpoint_file(path, device)
@@ -380,6 +409,17 @@ def load_checkpoint(
     return checkpoint
 
 
+def _legacy_moe_metadata(ckpt: dict) -> dict | None:
+    """MoE shape from the pre-``ckpt["moe"]`` notebook schema (top-level keys), or ``None``."""
+    if "expert_layers" in ckpt and "n_experts" in ckpt:
+        return {
+            "expert_layers": list(ckpt["expert_layers"]),
+            "n_experts": int(ckpt["n_experts"]),
+            "top_k": int(ckpt.get("top_k", 1)),
+        }
+    return None
+
+
 def build_model_from_checkpoint(
     checkpoint_path: str,
     device: torch.device | None = None,
@@ -391,10 +431,13 @@ def build_model_from_checkpoint(
     The architecture is taken from ``ckpt["model_config"]`` (always present for
     checkpoints written by ``save_checkpoint``). ``model_config_name`` (a preset
     name or YAML path) is only used as a fallback for files without one.
+    Mixture-of-Experts checkpoints carry ``ckpt["moe"]`` (see ``moe.moe_metadata``);
+    the same layers are grafted onto the dense skeleton before the weights load,
+    so dense and MoE checkpoints go through this one path.
     Returns ``(model, checkpoint_dict)``; the checkpoint is loaded exactly once
     and RNG states are *not* restored.
     """
-    from .config import get_model_config, load_model_config
+    from .config import MoEConfig, get_model_config, load_model_config
     from .model import TransformerLM
 
     if device is None:
@@ -414,6 +457,10 @@ def build_model_from_checkpoint(
         )
 
     model = TransformerLM(model_config).to(device)
+    moe = ckpt.get("moe") or _legacy_moe_metadata(ckpt)
+    if moe:
+        from .moe import graft_moe
+        graft_moe(model, config_from_dict(MoEConfig, dict(moe), checkpoint_path), warm_start=False)
     model.load_state_dict(strip_compile_prefix(ckpt["model_state_dict"]))
     model.eval()
     return model, ckpt
