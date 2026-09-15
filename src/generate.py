@@ -164,6 +164,63 @@ class ChatSession:
         return response
 
 
+def chat_widget(session: ChatSession, *, title: str = "LLM-Proto Chat"):
+    """ipywidgets chat UI over a ``ChatSession`` (Jupyter / Colab).
+
+    Sliders edit the session's sampling settings live; "Send" appends a turn to the
+    conversation (history is kept by the session), "Clear" resets it. Returns the
+    top-level widget; ``display()`` it. ``ipywidgets`` is imported here so the rest
+    of this module stays usable without it.
+    """
+    import ipywidgets as widgets
+
+    prompt_input = widgets.Textarea(placeholder="Type your message...",
+                                    layout=widgets.Layout(width="100%", height="80px"))
+    sliders = {
+        "max_new_tokens": widgets.IntSlider(value=session.max_new_tokens, min=16, max=1024, step=16,
+                                            description="Max tokens:", style={"description_width": "110px"}),
+        "temperature": widgets.FloatSlider(value=session.temperature, min=0.1, max=2.0, step=0.05,
+                                           description="Temperature:", style={"description_width": "110px"}),
+        "top_k": widgets.IntSlider(value=session.top_k, min=1, max=200, step=1,
+                                   description="Top-K:", style={"description_width": "110px"}),
+        "top_p": widgets.FloatSlider(value=session.top_p, min=0.1, max=1.0, step=0.05,
+                                     description="Top-P:", style={"description_width": "110px"}),
+        "repetition_penalty": widgets.FloatSlider(value=session.repetition_penalty, min=1.0, max=2.0, step=0.05,
+                                                  description="Rep. penalty:", style={"description_width": "110px"}),
+    }
+    send_btn = widgets.Button(description="Send", button_style="primary", layout=widgets.Layout(width="120px"))
+    clear_btn = widgets.Button(description="Clear", button_style="warning", layout=widgets.Layout(width="120px"))
+    output = widgets.Output(layout=widgets.Layout(width="100%", border="1px solid #ccc", min_height="200px",
+                                                  max_height="600px", overflow="auto", padding="10px"))
+
+    def on_send(_):
+        prompt = prompt_input.value.strip()
+        if not prompt:
+            return
+        for name, slider in sliders.items():
+            setattr(session, name, slider.value)
+        prompt_input.value = ""
+        with output:
+            print(f"You:   {prompt}")
+            print(f"Model: {session.reply(prompt)}")
+            print("-" * 60)
+
+    def on_clear(_):
+        session.clear()
+        output.clear_output()
+
+    send_btn.on_click(on_send)
+    clear_btn.on_click(on_clear)
+    return widgets.VBox([
+        widgets.HTML(f"<h3>{title}</h3>"),
+        prompt_input,
+        widgets.HBox([send_btn, clear_btn]),
+        widgets.VBox(list(sliders.values())),
+        widgets.HTML("<hr>"),
+        output,
+    ])
+
+
 def interactive_chat(
     model: TransformerLM,
     tokenizer: LLMTokenizer,

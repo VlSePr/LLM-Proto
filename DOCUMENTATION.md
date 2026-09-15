@@ -25,6 +25,7 @@
 15. [Training Data Flow — End to End](#15-training-data-flow--end-to-end)
 16. [Model Size Presets](#16-model-size-presets)
 17. [Dependencies](#17-dependencies)
+18. [Mixture-of-Experts Fine-tuning (`src/moe.py`, `src/finetune_moe.py`, `src/corpus.py`)](#18-mixture-of-experts-fine-tuning)
 
 ---
 
@@ -94,7 +95,8 @@ LLM-Proto is a **complete, self-contained framework** for pre-training decoder-o
 LLM-Proto/
 ├── configs/                    # All YAML configuration files
 │   ├── data.yaml               # Data sources, tokenizer settings, processing params
-│   └── training.yaml           # Training hyperparameters (LR, batch size, etc.)
+│   ├── training.yaml           # Training hyperparameters (LR, batch size, etc.)
+│   └── finetune_moe.yaml       # MoE fine-tuning hyperparameters (seq_len, aux_loss_coeff, ...)
 │
 ├── src/                        # Core Python source code
 │   ├── __init__.py             # Package marker (empty)
@@ -102,7 +104,10 @@ LLM-Proto/
 │   ├── model.py                # Full Transformer model implementation
 │   ├── tokenizer.py            # BPE tokenizer training & inference
 │   ├── data.py                 # Multi-source data pipeline → binary shards
-│   ├── train.py                # Training loop with all bells and whistles
+│   ├── train.py                # Training loop with all bells and whistles (also MoE fine-tuning)
+│   ├── moe.py                  # SparseMoE, graft/freeze/expand helpers, load diagnostics
+│   ├── finetune_moe.py         # python -m src.finetune_moe
+│   ├── corpus.py               # Fine-tuning corpus: HF datasets → cleaned JSONL → shards
 │   ├── evaluate.py             # Validation loss / perplexity / benchmarks
 │   ├── generate.py             # Text generation with KV-cache
 │   ├── visualize.py            # Model internals visualization
@@ -125,8 +130,10 @@ LLM-Proto/
 │
 ├── checkpoints/                # Saved model checkpoints (generated)
 │
-├── LLM-proto.ipynb             # Main training notebook (Colab-ready)
-├── LLM-inference.ipynb         # Inference/demo notebook
+├── LLM_proto.ipynb             # Main training notebook (Colab-ready)
+├── LLM-expert.ipynb            # MoE fine-tuning notebook
+├── LLM-inference.ipynb         # Inference/chat notebook
+├── tests/                      # pytest suite (incl. a static drift guard for the notebooks)
 └── requirements.txt            # Python dependencies
 ```
 
@@ -1063,3 +1070,68 @@ Step 6: Generate text
 | `tqdm` | ≥4.66.0 | Progress bars |
 | `google-api-python-client` | ≥2.100.0 | Google Drive API |
 | `google-auth` | ≥2.23.0 | Google authentication |
+
+---
+
+## 18. Mixture-of-Experts Fine-tuning
+
+MoE support is a **post-hoc graft** on a trained dense model, not a separate architecture. This keeps `ModelConfig`,
+the presets and every existing checkpoint untouched.
+
+### 18.1 `SparseMoE` (`src/moe.py`)
+
+A drop-in replacement for `FeedForward`: a bias-free linear router (`dim → n_experts`, softmax, top-k, renormalised
+weights) and `n_experts` SwiGLU experts (`ExpertFFN`, same parameter names as `FeedForward`). Per-expert dispatch
+gathers the tokens routed to each expert, runs one batched FFN call and scatters the weighted result back.
+
+During training the layer computes the Switch-Transformer load-balance loss
+`L_aux = n_experts · Σ_i f_i · P_i` (`f_i` fraction of tokens dispatched to expert `i`, `P_i` mean router probability)
+and stores it in `self.aux_loss`. `TransformerLM.forward` duck-types `hasattr(layer.ffn, "aux_loss")` and returns the
+sum as `out["aux_loss"]`; dense models never produce the key.
+
+### 18.2 Grafting, freezing, growing
+
+```python
+from src.config import MoEConfig
+from src.moe import graft_moe, freeze_for_moe, expand_moe_experts, moe_metadata
+
+graft_moe(model, MoEConfig(expert_layers=list(range(24, 32)), n_experts=1, top_k=1))  # warm-started copies of the FFN
+freeze_for_moe(model)              # only router + experts keep requires_grad
+expand_moe_experts(model, 1, top_k=2)   # next round: old experts frozen, new one trainable, router widened in place
+moe_metadata(model)                # {"expert_layers": [...], "n_experts": 2, "top_k": 2}  — stored as ckpt["moe"]
+```
+
+With warm start the model output is unchanged at graft time (identical experts, weights summing to 1), which the tests
+pin. `expand_moe_experts` preserves the old router rows and initialises the new ones near zero so a new expert has to
+earn its load. `top_k` changes only when passed explicitly.
+
+### 18.3 Training and checkpoints
+
+`train(model_config, train_config, model=model)` is the regular loop with a pre-built model: only `requires_grad`
+parameters are optimised, `train_config.seq_len` shortens the training window, `aux_loss_coeff · aux_loss` is added to
+the LM loss (`train/aux_loss` is logged separately; `train/loss` stays LM-only), and every checkpoint stores
+`ckpt["moe"]`. `build_model_from_checkpoint` reads it and grafts the same layers **before** `load_state_dict`, so
+`python -m src.generate`, `python -m src.evaluate` and the notebooks load expert checkpoints through the ordinary path.
+Legacy notebook checkpoints (top-level `n_experts/top_k/expert_layers`) are accepted by a small shim.
+
+`python -m src.finetune_moe` is the CLI (`--expert_layers 24-31 --n_experts 1 --top_k 1` for round 1,
+`--expand_from <expert ckpt> --n_new 1 --top_k 2` for growth rounds) and shares the training overrides with
+`python -m src.train`. `configs/finetune_moe.yaml` holds the fine-tuning defaults (`seq_len: 1024`, gradient
+checkpointing on, `use_compile: 'false'` because the per-expert dispatch branches graph-break).
+
+### 18.4 Fine-tuning corpus (`src/corpus.py`)
+
+`build_finetune_corpus(datasets, jsonl_path=..., tokenizer_path=..., bins_dir=...)` downloads HuggingFace datasets
+(`"name"` or `{"name", "fields"}` for QA data), cleans each document with `clean_corpus_text`, writes a JSONL file and
+tokenizes it through `ensure_tokenized_data` (so it is cached by fingerprint). Two cleaners exist on purpose:
+
+| Function | Used for | Removes |
+|----------|----------|---------|
+| `strip_special_token_text` | model output (`generate.clean_generated_text`) | only `<\|name\|>` markup; code and `a < b` survive |
+| `clean_corpus_text` | training data from chat transcripts | keeps the Llama-3 assistant span, drops `<s>…</s>`, `<\|…\|>`, tag-shaped `<br>`/`</s>`, normalises whitespace (paragraphs kept) |
+
+### 18.5 Diagnostics
+
+`measure_expert_load(model, loader, n_batches)` tallies router decisions per layer via forward hooks (each layer's
+counts sum to `tokens · top_k`); `visualize.plot_expert_load` draws them against the uniform line. A skewed
+distribution means the router is collapsing: raise `aux_loss_coeff`.

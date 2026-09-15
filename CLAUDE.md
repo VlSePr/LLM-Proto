@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A from-scratch LLaMA-style decoder-only LM in PyTorch (RMSNorm, RoPE, GQA, SwiGLU), with a tokenizer
-trainer, a fingerprinted shard-building data pipeline, an exactly-resumable training loop, and inference
-/ evaluation CLIs. All logic lives in `src/`; the notebooks (`LLM_proto.ipynb` for Colab training,
-`LLM-inference.ipynb`) are thin drivers that `from src... import` — put new behaviour in `src/`, not in
-notebook cells. `DOCUMENTATION.md` is a long technical reference (math, diagrams) worth consulting
-before changing `model.py` or `train.py`.
+trainer, a fingerprinted shard-building data pipeline, an exactly-resumable training loop, inference /
+evaluation CLIs, and post-hoc Mixture-of-Experts fine-tuning. All logic lives in `src/`; the three
+notebooks (`LLM_proto.ipynb` training, `LLM-expert.ipynb` MoE fine-tuning, `LLM-inference.ipynb` chat)
+are thin drivers that `from src... import`. `tests/test_notebooks.py` enforces this: no `def`/`class` in
+a code cell, no raw `torch.save`/`torch.load`/`load_state_dict`, and every `from src.x import name` must
+resolve — so new behaviour goes in `src/` and the notebook gets a call. `DOCUMENTATION.md` is a long
+technical reference (math, diagrams) worth consulting before changing `model.py` or `train.py`.
 
 ## Commands
 
@@ -33,6 +35,11 @@ python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtu
 python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtures/training_smoke.yaml --max_steps 20 --resume latest
 python -m src.generate --checkpoint smoke_run/checkpoints/latest.pt --prompt "Alice was" --max_tokens 16
 python -m src.evaluate --checkpoint smoke_run/checkpoints/latest.pt --data_dir smoke_run/data --batch_size 2
+# MoE fine-tuning on top of that checkpoint: graft 2 experts into layer 1, then grow to 3 with top_k=2
+python -m src.finetune_moe --base_checkpoint smoke_run/checkpoints/latest.pt --expert_layers 1 --n_experts 2 --top_k 1 --config tests/fixtures/finetune_smoke.yaml --max_steps 5
+python -m src.finetune_moe --base_checkpoint smoke_run/checkpoints/latest.pt --expand_from smoke_run/expert/latest.pt --n_new 1 --top_k 2 --config tests/fixtures/finetune_smoke.yaml --checkpoint_dir smoke_run/expert2 --max_steps 5
+python -m src.generate --checkpoint smoke_run/expert2/latest.pt --prompt "Alice was" --max_tokens 16
+python -m src.evaluate --checkpoint smoke_run/expert2/latest.pt --data_dir smoke_run/data --batch_size 2
 
 # Real pipeline (see README for flags)
 python scripts/train_tokenizer.py                       # -> tokenizer_data/ (committed)
@@ -92,6 +99,28 @@ Notebook outputs are stripped on commit via `.gitattributes` (`nbstripout --inst
 - OOM handling: micro-batches for a step are held so the whole step can be replayed with a sequence
   cap shrunk by 25% per retry, down to `min_seq_len`.
 - `train(..., stop_after_step=N)` saves and returns after step N; tests use it to simulate interruption.
+- `train(model_config, train_config, model=prebuilt)` trains a model you built (only `requires_grad` params
+  are optimised), honours `train_config.seq_len` (< `max_seq_len`) and adds `aux_loss_coeff * out["aux_loss"]`
+  when the model returns one. It returns the metric history list. The CLI override parsing lives in
+  `add_train_override_args` / `train_config_from_args` and is shared with `src.finetune_moe`.
+
+### MoE fine-tuning (`src/moe.py`, `src/finetune_moe.py`, `src/corpus.py`)
+- MoE is a **post-hoc graft**: `TransformerLM(config)` always builds the dense skeleton, then `graft_moe`
+  swaps `layers[i].ffn` for a `SparseMoE` (experts warm-started from the dense FFN, so output is unchanged at
+  graft time) and `freeze_for_moe` leaves only router + experts trainable. `MoEConfig` is deliberately not
+  part of `ModelConfig`, so presets and old checkpoints are untouched.
+- `SparseMoE` stores its load-balance loss on the module; `TransformerLM.forward` duck-types
+  `hasattr(layer.ffn, "aux_loss")` and sums them into `out["aux_loss"]`. Dense models never get the key.
+- Checkpoints carry `ckpt["moe"] = moe_metadata(model)` (derived from the live modules, so an expanded
+  model is described correctly). `build_model_from_checkpoint` grafts from it **before** `load_state_dict`,
+  which is why `generate`/`evaluate`/the notebooks need no MoE-specific code. A shim reads the old notebook
+  schema (top-level `n_experts/top_k/expert_layers`).
+- `expand_moe_experts` grows every MoE layer (old experts frozen, new ones warm-started, router widened in
+  place); `top_k` changes only when passed. `python -m src.finetune_moe --expand_from` is a growth round.
+- `src/corpus.py` has two cleaners on purpose: `strip_special_token_text` (only `<|name|>`; used by
+  `generate.clean_generated_text`, must keep code and inequalities) and `clean_corpus_text` (training data:
+  Llama-3 assistant span, `<s>..</s>`, tag-shaped bare tags, whitespace). `build_finetune_corpus` ends in
+  `ensure_tokenized_data`, so the corpus is cached like any other source.
 
 ### Tokenizer (`src/tokenizer.py`)
 - HuggingFace `tokenizers` BPE with byte fallback. Special tokens `<|bos|> <|eos|> <|pad|>
@@ -104,8 +133,15 @@ Two modes chosen at runtime: on Colab, `gdrive_folder_id` is a folder *name* und
 mounted drive; elsewhere it is a real Drive folder *ID* used through the REST API with a service-account
 JSON. All Drive calls in the data cache and checkpoint paths are best-effort and wrapped in `try/except`.
 
+### Notebook helpers
+Everything a notebook used to inline now has a home: `utils.default_num_workers` (0 on Windows / in Jupyter),
+`utils.resolve_checkpoint_path` (download-if-missing), `tokenizer.ensure_tokenizer` (local → Drive → train),
+`data.resolve_sources` / `ensure_tokenized_data_from_config`, `gdrive.describe_drive_setup`,
+`generate.ChatSession` + `chat_widget`, `visualize.plot_training_curves` / `plot_expert_load`.
+
 ### Tests (`tests/`)
 `conftest.py` provides `tiny_cfg` (vocab 512, dim 64, 2 layers), `write_shards`/`tmp_data` (random
 uint16 shards in `tmp_path`), and a session-scoped tiny tokenizer. Tests are CPU-only and never touch the
-network or real Drive (`test_gdrive.py` uses a fake Drive v3 service object). Smoke-run YAMLs live in
-`tests/fixtures/` and mirror the real configs at toy scale.
+network or real Drive (`test_gdrive.py` uses a fake Drive v3 service object; `test_corpus.py` passes
+`texts=` instead of downloading). Smoke-run YAMLs live in `tests/fixtures/` and mirror the real configs at
+toy scale. `test_notebooks.py` parses the `.ipynb` files statically (no kernel); executing them needs a GPU.

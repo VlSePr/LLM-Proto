@@ -1,7 +1,15 @@
+import pytest
 import torch
 
 from src.config import TrainConfig
-from src.generate import ChatSession, clean_generated_text, generate_ids, generate_text, load_model_for_inference
+from src.generate import (
+    ChatSession,
+    chat_widget,
+    clean_generated_text,
+    generate_ids,
+    generate_text,
+    load_model_for_inference,
+)
 from src.model import TransformerLM
 from src.utils import save_checkpoint
 
@@ -57,3 +65,17 @@ def test_chat_session_keeps_bounded_history(tiny_cfg, tokenizer, seed):
     assert len(session.turns) == 7
     session.clear()
     assert session.history == [] and session.turns == []
+
+
+def test_chat_widget_drives_session(tiny_cfg, tokenizer, seed):
+    pytest.importorskip("ipywidgets")
+    model = TransformerLM(tiny_cfg).eval()
+    session = ChatSession(model, tokenizer, max_new_tokens=8, temperature=0.0)
+    ui = chat_widget(session)
+    textarea, buttons = ui.children[1], ui.children[2]
+    send_btn, clear_btn = buttons.children
+    textarea.value = "hello"
+    send_btn.click()
+    assert len(session.turns) == 1 and textarea.value == ""
+    clear_btn.click()
+    assert session.turns == [] and session.history == []
