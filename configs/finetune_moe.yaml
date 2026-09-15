@@ -1,0 +1,33 @@
+# MoE fine-tuning config (python -m src.finetune_moe --config configs/finetune_moe.yaml).
+# Same schema as training.yaml; only the fields that differ from a pre-training run are set.
+# The tokenizer path is taken from the base checkpoint unless --tokenizer_path is passed.
+
+# --- Data ---
+data_dir: data/custom/bins        # shards built from the fine-tuning corpus (src/corpus.py)
+
+# --- Optimization ---
+seq_len: 1024                     # shorter than the model context: activation memory scales with B x T
+batch_size: 4
+gradient_accumulation_steps: 16   # effective batch = 64 sequences
+max_steps: 2000
+warmup_steps: 100
+peak_lr: 3.0e-04
+min_lr: 1.0e-05
+aux_loss_coeff: 0.01              # router load-balance loss weight
+
+# --- Checkpointing ---
+checkpoint_dir: checkpoints/expert
+save_every_steps: 200
+keep_last_n_checkpoints: 3
+
+# --- Logging ---
+log_every_steps: 50
+eval_every_steps: 200
+eval_max_batches: 20
+generate_every_steps: 500
+visualize_every_steps: 100000     # effectively off: one panel per expert weight is too much
+use_wandb: false
+
+# --- Performance ---
+gradient_checkpointing: true      # required for the large model; enabled before compile
+use_compile: 'false'              # per-expert dispatch branches graph-break under torch.compile

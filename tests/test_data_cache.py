@@ -7,14 +7,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src import data
-from src import gdrive
+from src import data, gdrive
 from src.data import (
-    FORMAT_VERSION, compute_fingerprint, ensure_tokenized_data,
-    find_train_shards, normalize_sources, read_manifest, tokenize_and_save,
+    FORMAT_VERSION,
+    compute_fingerprint,
+    ensure_tokenized_data,
+    find_train_shards,
+    normalize_sources,
+    read_manifest,
+    tokenize_and_save,
     validate_local_cache,
 )
-
 
 # ──────────────────────────────────────────────
 # Helpers / fixtures

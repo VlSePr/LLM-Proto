@@ -1,7 +1,12 @@
 import pytest
 
 from src.config import (
-    ModelConfig, TrainConfig, get_model_config, load_model_config, load_train_config, config_from_dict,
+    ModelConfig,
+    TrainConfig,
+    config_from_dict,
+    get_model_config,
+    load_model_config,
+    load_train_config,
 )
 
 
@@ -21,6 +26,14 @@ def test_presets_are_copies():
     assert a is not b
     a.vocab_size = 1000
     assert get_model_config("tiny").vocab_size == 32_000
+
+
+@pytest.mark.parametrize("name,millions", [
+    ("tiny", 35), ("small", 100), ("medium", 303), ("base", 466), ("large", 1509),
+])
+def test_preset_param_counts_match_readme(name, millions):
+    """MODEL_CONFIGS is the single source of truth; the README table must agree with it."""
+    assert round(get_model_config(name).param_count_estimate() / 1e6) == millions
 
 
 def test_yaml_scientific_notation_string_is_coerced(tmp_path):

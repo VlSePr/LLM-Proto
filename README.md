@@ -13,7 +13,8 @@ A from-scratch LLaMA-style Transformer language model framework built with PyTor
 - **BPE Tokenizer** — 32K vocabulary with byte-level fallback (HuggingFace `tokenizers` backend)
 - **Google Drive Backup** — optional checkpoint sync (Colab mount or REST API)
 - **Weights & Biases** — experiment tracking, loss curves, sample generations, model visualizations
-- **5 Model Presets** — tiny (35M), small (100M), medium (300M), base (470M), large (1.5B)
+- **5 Model Presets** — tiny (35M), small (100M), medium (303M), base (466M), large (1.5B)
+- **MoE Fine-tuning** — graft sparse Mixture-of-Experts layers onto a trained checkpoint, train only the experts, grow the pool round by round
 - **Environment Support** — Google Colab, vast.ai, local GPU
 
 ## Quick Start
@@ -83,10 +84,30 @@ python -m src.generate --checkpoint checkpoints/best.pt --repetition_penalty 1.2
 python -m src.evaluate --checkpoint checkpoints/best.pt --data_dir data
 ```
 
+### 7. MoE fine-tuning (optional)
+
+Turn the FFN of selected blocks into a sparse Mixture-of-Experts layer whose experts start as copies of the dense
+FFN, freeze everything else, and fine-tune the experts on domain data with the regular trainer:
+
+```bash
+# Round 1: one expert per layer in the last 8 blocks of the large model
+python -m src.finetune_moe --base_checkpoint checkpoints/best.pt --expert_layers 24-31 --n_experts 1 --top_k 1 \
+    --config configs/finetune_moe.yaml
+
+# Round 2: add one more expert (old experts frozen), activate two per token
+python -m src.finetune_moe --base_checkpoint checkpoints/best.pt --expand_from checkpoints/expert/latest.pt \
+    --n_new 1 --top_k 2 --config configs/finetune_moe.yaml --checkpoint_dir checkpoints/expert_r2
+```
+
+Expert checkpoints carry their MoE shape (`ckpt["moe"]`), so `src.generate` and `src.evaluate` load them unchanged.
+`src/corpus.py` builds a fine-tuning corpus from HuggingFace datasets (cleaning chat-template markup) and tokenizes it
+through the cached shard pipeline; `LLM-expert.ipynb` walks through the whole workflow.
+
 ## Tests and smoke run
 
 ```bash
 pytest -q                      # unit tests, CPU only, < 10 s
+ruff check src tests scripts   # lint (config in ruff.toml); must be clean
 ```
 
 A full CPU pipeline run on a toy corpus (tokenizer → shards → train → resume → generate → evaluate):
@@ -98,6 +119,11 @@ python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtu
 python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtures/training_smoke.yaml --max_steps 20 --resume latest
 python -m src.generate --checkpoint smoke_run/checkpoints/latest.pt --prompt "Alice was" --max_tokens 16
 python -m src.evaluate --checkpoint smoke_run/checkpoints/latest.pt --data_dir smoke_run/data --batch_size 2
+# MoE fine-tuning on top of that checkpoint: graft 2 experts into layer 1, then grow to 3 with top_k=2
+python -m src.finetune_moe --base_checkpoint smoke_run/checkpoints/latest.pt --expert_layers 1 --n_experts 2 --top_k 1 --config tests/fixtures/finetune_smoke.yaml --max_steps 5
+python -m src.finetune_moe --base_checkpoint smoke_run/checkpoints/latest.pt --expand_from smoke_run/expert/latest.pt --n_new 1 --top_k 2 --config tests/fixtures/finetune_smoke.yaml --checkpoint_dir smoke_run/expert2 --max_steps 5
+python -m src.generate --checkpoint smoke_run/expert2/latest.pt --prompt "Alice was" --max_tokens 16
+python -m src.evaluate --checkpoint smoke_run/expert2/latest.pt --data_dir smoke_run/data --batch_size 2
 ```
 
 ## Project Structure
@@ -106,13 +132,16 @@ python -m src.evaluate --checkpoint smoke_run/checkpoints/latest.pt --data_dir s
 LLM-Proto/
 ├── configs/                 # YAML configuration files
 │   ├── data.yaml            # Data sources & tokenizer settings
-│   ├── training.yaml        # Training hyperparameters
-│   └── model_*.yaml         # Model architecture presets (tiny → large)
+│   ├── training.yaml        # Training hyperparameters (model presets live in src/config.py)
+│   └── finetune_moe.yaml    # MoE fine-tuning hyperparameters
 ├── src/                     # Core source code
 │   ├── model.py             # Transformer model (RMSNorm, RoPE, GQA, SwiGLU)
 │   ├── tokenizer.py         # BPE tokenizer training & inference
 │   ├── data.py              # Multi-source data pipeline → binary shards (python -m src.data)
-│   ├── train.py             # Full training loop
+│   ├── train.py             # Full training loop (also drives MoE fine-tuning)
+│   ├── moe.py               # SparseMoE layer, grafting, freezing, growth, load diagnostics
+│   ├── finetune_moe.py      # MoE fine-tuning CLI (python -m src.finetune_moe)
+│   ├── corpus.py            # Fine-tuning corpus: HF datasets → cleaned JSONL → shards
 │   ├── generate.py          # Text generation with KV-cache
 │   ├── evaluate.py          # Validation metrics (loss, perplexity)
 │   ├── visualize.py         # Model internals visualization
@@ -128,14 +157,16 @@ LLM-Proto/
 │   └── custom/              # Your own txt/ and jsonl/ data
 ├── tokenizer_data/          # Trained tokenizer output
 ├── checkpoints/             # Model checkpoints (generated)
-├── LLM_proto.ipynb          # Training notebook (Colab-ready)
-├── LLM-expert.ipynb         # Mixture-of-Experts fine-tuning notebook
-├── LLM-inference.ipynb      # Inference notebook
+├── LLM_proto.ipynb          # Training notebook (Colab-ready) — thin driver over src/
+├── LLM-expert.ipynb         # Mixture-of-Experts fine-tuning notebook — thin driver over src/
+├── LLM-inference.ipynb      # Inference / chat notebook — thin driver over src/
 └── requirements.txt         # Python dependencies
 ```
 
 ## Model Presets
 
+Presets are defined in `MODEL_CONFIGS` in `src/config.py` and selected by name (`--model small`).
+For a custom architecture, pass a YAML path instead (`--model my_model.yaml`); it accepts any `ModelConfig` field.
 Parameter counts are exact for the default 32K vocabulary with tied embeddings.
 
 | Preset | Params | Dim | Layers | Heads (Q/KV) | Context | Recommended GPU |

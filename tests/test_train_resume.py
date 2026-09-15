@@ -7,7 +7,7 @@ import torch
 from src.config import ModelConfig, TrainConfig
 from src.train import train
 from src.utils import load_checkpoint_file
-from tests.conftest import write_shards, TINY_VOCAB
+from tests.conftest import TINY_VOCAB, write_shards
 
 
 def _cfg(tmp_path, tag, **kw):

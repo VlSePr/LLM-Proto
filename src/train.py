@@ -5,24 +5,35 @@ checkpointing, periodic evaluation, text generation, and model internals visuali
 Works seamlessly in Colab, vast.ai, and local environments.
 """
 
-import os
 import gc
-import time
 import math
-import torch
+import os
+import time
 from contextlib import nullcontext
 from dataclasses import asdict
-from typing import Optional
+
+import torch
 
 from .config import ModelConfig, TrainConfig, get_model_config, load_model_config, load_train_config
-from .model import TransformerLM
-from .tokenizer import LLMTokenizer
 from .data import create_dataloader
 from .evaluate import compute_val_metrics
+from .model import TransformerLM
+from .moe import moe_metadata
+from .tokenizer import LLMTokenizer
 from .utils import (
-    detect_environment, get_device, get_dtype, should_compile, set_seed,
-    get_lr, save_checkpoint, load_checkpoint, has_checkpoint, unwrap_model,
-    make_grad_scaler, MetricsTracker, Timer,
+    MetricsTracker,
+    Timer,
+    detect_environment,
+    get_device,
+    get_dtype,
+    get_lr,
+    has_checkpoint,
+    load_checkpoint,
+    make_grad_scaler,
+    save_checkpoint,
+    set_seed,
+    should_compile,
+    unwrap_model,
 )
 from .visualize import generate_all_visualizations
 
@@ -31,18 +42,27 @@ def train(
     model_config: ModelConfig,
     train_config: TrainConfig,
     *,
-    stop_after_step: Optional[int] = None,
-):
+    model: TransformerLM | None = None,
+    stop_after_step: int | None = None,
+) -> list[dict]:
     """
-    Full pre-training loop.
+    Full training loop (pre-training, or fine-tuning when ``model`` is given).
 
     Checkpoint semantics: a checkpoint's ``step`` is the last *completed* optimizer
     step, and a resumed run continues at ``step + 1``. The final checkpoint is
     therefore written with ``step = max_steps - 1``.
 
     Args:
+        model: An already-built model to train instead of constructing one from
+            ``model_config`` (e.g. a base model with MoE layers grafted on and the
+            rest frozen; see ``src/finetune_moe.py``). Only parameters with
+            ``requires_grad`` are optimised. If the model exposes ``out["aux_loss"]``
+            it is added to the LM loss with weight ``train_config.aux_loss_coeff``.
         stop_after_step: If set, save a checkpoint and return once this step has
             completed (simulates an interruption; used by tests and budgeted runs).
+
+    Returns:
+        The list of logged metric dicts (``MetricsTracker.history``), one per log call.
     """
     env = detect_environment()
     device = get_device()
@@ -50,6 +70,11 @@ def train(
     print(f"Environment: {env} | Device: {device} | Dtype: {dtype}")
 
     set_seed(train_config.seed)
+
+    # Sequence length used for batches; fine-tuning may use less than the model's context.
+    seq_len = train_config.seq_len or model_config.max_seq_len
+    if not 1 <= seq_len <= model_config.max_seq_len:
+        raise ValueError(f"seq_len={seq_len} must be in [1, max_seq_len={model_config.max_seq_len}]")
 
     # ── Tokenizer (for generation samples) — loaded first so we can validate vocab ──
     tokenizer = LLMTokenizer(train_config.tokenizer_path)
@@ -63,7 +88,10 @@ def train(
               f"{model_config.vocab_size - tokenizer.vocab_size} embedding rows will be unused.")
 
     # ── Model ──
-    model = TransformerLM(model_config).to(device)
+    if model is None:
+        model = TransformerLM(model_config).to(device)
+    else:
+        model = model.to(device)
     print(model.summary())
 
     if train_config.gradient_checkpointing:
@@ -75,6 +103,7 @@ def train(
         print("Compiling model with torch.compile...")
         model = torch.compile(model)
     base_model = unwrap_model(model)  # plain module for generate()/visualizations
+    moe_meta = moe_metadata(base_model)  # None for dense models; stored in every checkpoint
 
     # ── Optimizer ──
     # Separate parameters into two groups:
@@ -147,9 +176,7 @@ def train(
         "param_count": base_model.count_parameters(),
     })
 
-    tokens_per_full_step = (
-        train_config.batch_size * model_config.max_seq_len * train_config.gradient_accumulation_steps
-    )
+    tokens_per_full_step = train_config.batch_size * seq_len * train_config.gradient_accumulation_steps
 
     # ── Resume ──
     start_step = 0
@@ -187,12 +214,12 @@ def train(
 
     # ── Data ──
     train_loader = create_dataloader(
-        train_config.data_dir, model_config.max_seq_len,
+        train_config.data_dir, seq_len,
         train_config.batch_size, "train", train_config.num_workers,
         seed=train_config.seed,
     )
     val_loader = create_dataloader(
-        train_config.data_dir, model_config.max_seq_len,
+        train_config.data_dir, seq_len,
         train_config.batch_size, "val", train_config.num_workers,
         shuffle=False,
     )
@@ -229,9 +256,11 @@ def train(
 
     model.train()
     running_loss = 0.0
+    running_aux = 0.0
+    has_aux = False
     steps_in_window = 0
-    last_logged_loss: Optional[float] = None
-    last_val_loss: Optional[float] = None
+    last_logged_loss: float | None = None
+    last_val_loss: float | None = None
     improved_since_save = False   # did validation improve since the last checkpoint?
 
     def checkpoint(step: int):
@@ -247,6 +276,7 @@ def train(
             epoch=epoch,
             batches_in_epoch=batches_in_epoch,
             tokens_seen=tokens_seen,
+            extra={"moe": moe_meta} if moe_meta else None,
         )
         improved_since_save = False
 
@@ -277,11 +307,12 @@ def train(
         # OOM-safe accumulation: retry the entire step with a shorter sequence cap
         # if CUDA runs out of memory.  Each retry shrinks the cap by 25% until it
         # either succeeds or hits train_config.min_seq_len.
-        seq_cap = model_config.max_seq_len
+        seq_cap = seq_len
         oom_retries = 0
         while True:
             optimizer.zero_grad(set_to_none=True)
             accum_loss = torch.zeros((), device=device)
+            accum_aux = torch.zeros((), device=device)
             try:
                 for ids, tgts in micro_batches:
                     ids  = ids[:, :seq_cap].to(device, non_blocking=True)
@@ -290,9 +321,18 @@ def train(
                         out  = model(ids, targets=tgts)
                         # Divide loss by accumulation steps so the sum of micro-batch
                         # gradients equals the gradient of the full effective batch.
-                        loss = out["loss"] / train_config.gradient_accumulation_steps
+                        lm_loss = out["loss"] / train_config.gradient_accumulation_steps
+                        # MoE models also return a router load-balance loss (src/moe.py).
+                        aux = out.get("aux_loss")
+                        loss = lm_loss
+                        if aux is not None:
+                            aux = aux / train_config.gradient_accumulation_steps
+                            loss = lm_loss + train_config.aux_loss_coeff * aux
                     scaler.scale(loss).backward()
-                    accum_loss += loss.detach().float()
+                    accum_loss += lm_loss.detach().float()
+                    if aux is not None:
+                        accum_aux += aux.detach().float()
+                        has_aux = True
                 break  # all micro-steps succeeded
             except torch.cuda.OutOfMemoryError:
                 gc.collect()
@@ -302,7 +342,7 @@ def train(
                     raise RuntimeError(
                         f"OOM at step {step} even with minimum seq_len={seq_cap}. "
                         "Enable gradient_checkpointing or reduce batch_size."
-                    )
+                    ) from None
                 oom_retries += 1
                 seq_cap = new_cap
                 print(f"  ! OOM at step {step} -- retry {oom_retries} with seq_cap={seq_cap}")
@@ -323,6 +363,8 @@ def train(
         )
         tokens_seen += tokens_this_step
         running_loss += accum_loss.item()   # single device sync per step
+        if has_aux:
+            running_aux += accum_aux.item()
         steps_in_window += 1
         timer.step()
         t1 = time.time()
@@ -343,6 +385,8 @@ def train(
                 "train/epoch": epoch,
                 "train/elapsed_hours": timer.elapsed() / 3600,
             }
+            if has_aux:
+                metrics["train/aux_loss"] = running_aux / max(steps_in_window, 1)
             tracker.log(metrics, step)
 
             print(
@@ -351,6 +395,7 @@ def train(
                 f"{timer.elapsed() / 3600:.1f}h"
             )
             running_loss = 0.0
+            running_aux = 0.0
             steps_in_window = 0
 
         # ── Validation ──
@@ -388,7 +433,7 @@ def train(
                 checkpoint(step)
             print(f"\nStopping after step {step} (stop_after_step); resume with --resume latest")
             tracker.finish()
-            return
+            return tracker.history
 
         # ── Sample generation ──
         if step % train_config.generate_every_steps == 0 and step > 0:
@@ -418,6 +463,7 @@ def train(
     else:
         print(f"\nNothing to do: checkpoint already at step {start_step - 1} >= max_steps - 1")
     tracker.finish()
+    return tracker.history
 
 
 @torch.no_grad()
@@ -458,45 +504,37 @@ def generate_samples(
 # CLI Entry Point
 # ──────────────────────────────────────────────
 
-def main():
-    """CLI entry point for training."""
-    import argparse
+_OVERRIDE_FIELDS = (
+    "batch_size", "gradient_accumulation_steps", "max_steps", "peak_lr", "precision",
+    "use_compile", "num_workers", "seed", "seq_len", "aux_loss_coeff", "wandb_project",
+    "wandb_run_name", "data_dir", "checkpoint_dir", "tokenizer_path",
+)
 
-    parser = argparse.ArgumentParser(description="Pre-train LLM from scratch")
-    parser.add_argument("--model", type=str, default="tiny",
-                        help="Model config name (tiny/small/medium/base/large) or path to YAML")
+
+def add_train_override_args(parser) -> None:
+    """Add ``--config``, ``--resume`` and the common ``TrainConfig`` overrides to ``parser``.
+
+    Shared by ``python -m src.train`` and ``python -m src.finetune_moe``.
+    """
     parser.add_argument("--config", type=str, default="",
                         help="Path to training config YAML (overrides defaults)")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from checkpoint: 'latest', 'best', 'step_N', or a name. "
                              "Pass '' to force a fresh start even if the config sets resume.")
-
-    # Common overrides
-    parser.add_argument("--batch_size", type=int, default=None)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
-    parser.add_argument("--max_steps", type=int, default=None)
-    parser.add_argument("--peak_lr", type=float, default=None)
+    for name in ("batch_size", "gradient_accumulation_steps", "max_steps", "num_workers", "seed", "seq_len"):
+        parser.add_argument(f"--{name}", type=int, default=None)
+    for name in ("peak_lr", "aux_loss_coeff"):
+        parser.add_argument(f"--{name}", type=float, default=None)
     parser.add_argument("--precision", type=str, default=None, help="auto | bf16 | fp16 | fp32")
     parser.add_argument("--use_compile", type=str, default=None, help="auto | true | false")
-    parser.add_argument("--num_workers", type=int, default=None)
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--wandb_project", type=str, default=None)
-    parser.add_argument("--wandb_run_name", type=str, default=None)
+    for name in ("wandb_project", "wandb_run_name", "data_dir", "checkpoint_dir", "tokenizer_path"):
+        parser.add_argument(f"--{name}", type=str, default=None)
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--no_gdrive", action="store_true", help="Disable Google Drive backup")
-    parser.add_argument("--data_dir", type=str, default=None)
-    parser.add_argument("--checkpoint_dir", type=str, default=None)
-    parser.add_argument("--tokenizer_path", type=str, default=None)
 
-    args = parser.parse_args()
 
-    # Load model config
-    if os.path.isfile(args.model):
-        model_config = load_model_config(args.model)
-    else:
-        model_config = get_model_config(args.model)
-
-    # Load training config
+def train_config_from_args(args, parser) -> TrainConfig:
+    """Build a ``TrainConfig`` from ``--config`` (or defaults) and apply the CLI overrides."""
     if args.config:
         if not os.path.isfile(args.config):
             parser.error(f"--config file not found: {args.config}")
@@ -504,12 +542,9 @@ def main():
     else:
         train_config = TrainConfig()
 
-    # Apply CLI overrides
     if args.resume is not None:
         train_config.resume = args.resume
-    for name in ("batch_size", "gradient_accumulation_steps", "max_steps", "peak_lr", "precision",
-                 "use_compile", "num_workers", "seed", "wandb_project", "wandb_run_name",
-                 "data_dir", "checkpoint_dir", "tokenizer_path"):
+    for name in _OVERRIDE_FIELDS:
         value = getattr(args, name)
         if value is not None:
             setattr(train_config, name, value)
@@ -517,8 +552,25 @@ def main():
         train_config.use_wandb = False
     if args.no_gdrive:
         train_config.backup_to_gdrive = False
+    return train_config
 
-    train(model_config, train_config)
+
+def main():
+    """CLI entry point for training."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Pre-train LLM from scratch")
+    parser.add_argument("--model", type=str, default="tiny",
+                        help="Model config name (tiny/small/medium/base/large) or path to YAML")
+    add_train_override_args(parser)
+    args = parser.parse_args()
+
+    if os.path.isfile(args.model):
+        model_config = load_model_config(args.model)
+    else:
+        model_config = get_model_config(args.model)
+
+    train(model_config, train_config_from_args(args, parser))
 
 
 if __name__ == "__main__":

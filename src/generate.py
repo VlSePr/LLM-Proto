@@ -4,32 +4,30 @@ Supports single-prompt and multi-turn chat modes.
 Uses KV-cache for efficient autoregressive generation.
 """
 
-import re
 import torch
-from typing import List, Optional, Tuple
 
+from .corpus import strip_special_token_text
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer
-from .utils import get_device, build_model_from_checkpoint
-
-
-# Safety net for special-token *text* the model may have learned to emit verbatim
-# (e.g. "<|eot_id|>" from scraped chat transcripts). Real special tokens are already
-# dropped by tokenizer.decode(skip_special=True); this only matches the <|name|> shape,
-# so ordinary angle brackets, pipes and code stay intact.
-_SPECIAL_TOKEN_TEXT = re.compile(r"<\|[A-Za-z0-9_]+\|>")
+from .utils import build_model_from_checkpoint, get_device
 
 
 def clean_generated_text(text: str) -> str:
-    """Remove literal special-token markup and trim surrounding whitespace."""
-    return _SPECIAL_TOKEN_TEXT.sub("", text).strip()
+    """Remove literal special-token markup (``<|name|>``) and trim surrounding whitespace.
+
+    Real special tokens are already dropped by ``tokenizer.decode(skip_special=True)``;
+    this is a safety net for models that learned to emit the *text* of chat-template
+    tokens (e.g. ``<|eot_id|>``). Ordinary angle brackets, pipes and code are untouched
+    (the training-data cleaner in ``src/corpus.py`` is deliberately more aggressive).
+    """
+    return strip_special_token_text(text).strip()
 
 
 def load_model_for_inference(
     checkpoint_path: str,
-    model_config_name: Optional[str] = None,
-    device: Optional[torch.device] = None,
-) -> Tuple[TransformerLM, LLMTokenizer]:
+    model_config_name: str | None = None,
+    device: torch.device | None = None,
+) -> tuple[TransformerLM, LLMTokenizer]:
     """Load model and tokenizer for inference. Returns (model, tokenizer).
 
     The architecture comes from the checkpoint's ``model_config``; ``model_config_name``
@@ -51,14 +49,14 @@ def load_model_for_inference(
 def generate_ids(
     model: TransformerLM,
     tokenizer: LLMTokenizer,
-    prompt_ids: List[int],
+    prompt_ids: list[int],
     max_new_tokens: int = 256,
     temperature: float = 0.8,
     top_k: int = 50,
     top_p: float = 0.9,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
     repetition_penalty: float = 1.0,
-) -> List[int]:
+) -> list[int]:
     """Generate continuation token IDs for ``prompt_ids`` (prompt not included)."""
     if device is None:
         device = next(model.parameters()).device
@@ -93,7 +91,7 @@ def generate_text(
     temperature: float = 0.8,
     top_k: int = 50,
     top_p: float = 0.9,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
     repetition_penalty: float = 1.0,
     include_prompt: bool = False,
 ) -> str:
@@ -111,6 +109,118 @@ def generate_text(
     return text
 
 
+class ChatSession:
+    """Multi-turn chat state: a rolling token history plus the sampling settings.
+
+    Shared by the terminal ``interactive_chat`` and notebook widgets. Each ``reply``
+    feeds BOS + history + the new prompt to the model, appends prompt and answer to
+    the history, and truncates the history from the left so it always fits the
+    model's context window together with ``max_new_tokens``.
+    """
+
+    def __init__(
+        self,
+        model: TransformerLM,
+        tokenizer: LLMTokenizer,
+        *,
+        max_new_tokens: int = 256,
+        temperature: float = 0.8,
+        top_k: int = 50,
+        top_p: float = 0.9,
+        repetition_penalty: float = 1.0,
+    ):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
+        self.repetition_penalty = repetition_penalty
+        self.device = next(model.parameters()).device
+        self.history: list[int] = []
+        self.turns: list[tuple[str, str]] = []
+
+    @property
+    def max_history(self) -> int:
+        return max(1, self.model.config.max_seq_len - self.max_new_tokens - 1)
+
+    def clear(self) -> None:
+        self.history = []
+        self.turns = []
+
+    def reply(self, prompt: str) -> str:
+        """Generate the model's answer to ``prompt`` in the context of the conversation so far."""
+        turn_ids = self.tokenizer.encode(prompt + "\n", add_bos=False)
+        context_ids = [self.tokenizer.bos_id] + self.history + turn_ids
+        new_ids = generate_ids(
+            self.model, self.tokenizer, context_ids,
+            max_new_tokens=self.max_new_tokens, temperature=self.temperature,
+            top_k=self.top_k, top_p=self.top_p, repetition_penalty=self.repetition_penalty,
+            device=self.device,
+        )
+        self.history = (self.history + turn_ids + new_ids)[-self.max_history:]
+        response = clean_generated_text(self.tokenizer.decode(new_ids, skip_special=True))
+        self.turns.append((prompt, response))
+        return response
+
+
+def chat_widget(session: ChatSession, *, title: str = "LLM-Proto Chat"):
+    """ipywidgets chat UI over a ``ChatSession`` (Jupyter / Colab).
+
+    Sliders edit the session's sampling settings live; "Send" appends a turn to the
+    conversation (history is kept by the session), "Clear" resets it. Returns the
+    top-level widget; ``display()`` it. ``ipywidgets`` is imported here so the rest
+    of this module stays usable without it.
+    """
+    import ipywidgets as widgets
+
+    prompt_input = widgets.Textarea(placeholder="Type your message...",
+                                    layout=widgets.Layout(width="100%", height="80px"))
+    sliders = {
+        "max_new_tokens": widgets.IntSlider(value=session.max_new_tokens, min=16, max=1024, step=16,
+                                            description="Max tokens:", style={"description_width": "110px"}),
+        "temperature": widgets.FloatSlider(value=session.temperature, min=0.1, max=2.0, step=0.05,
+                                           description="Temperature:", style={"description_width": "110px"}),
+        "top_k": widgets.IntSlider(value=session.top_k, min=1, max=200, step=1,
+                                   description="Top-K:", style={"description_width": "110px"}),
+        "top_p": widgets.FloatSlider(value=session.top_p, min=0.1, max=1.0, step=0.05,
+                                     description="Top-P:", style={"description_width": "110px"}),
+        "repetition_penalty": widgets.FloatSlider(value=session.repetition_penalty, min=1.0, max=2.0, step=0.05,
+                                                  description="Rep. penalty:", style={"description_width": "110px"}),
+    }
+    send_btn = widgets.Button(description="Send", button_style="primary", layout=widgets.Layout(width="120px"))
+    clear_btn = widgets.Button(description="Clear", button_style="warning", layout=widgets.Layout(width="120px"))
+    output = widgets.Output(layout=widgets.Layout(width="100%", border="1px solid #ccc", min_height="200px",
+                                                  max_height="600px", overflow="auto", padding="10px"))
+
+    def on_send(_):
+        prompt = prompt_input.value.strip()
+        if not prompt:
+            return
+        for name, slider in sliders.items():
+            setattr(session, name, slider.value)
+        prompt_input.value = ""
+        with output:
+            print(f"You:   {prompt}")
+            print(f"Model: {session.reply(prompt)}")
+            print("-" * 60)
+
+    def on_clear(_):
+        session.clear()
+        output.clear_output()
+
+    send_btn.on_click(on_send)
+    clear_btn.on_click(on_clear)
+    return widgets.VBox([
+        widgets.HTML(f"<h3>{title}</h3>"),
+        prompt_input,
+        widgets.HBox([send_btn, clear_btn]),
+        widgets.VBox(list(sliders.values())),
+        widgets.HTML("<hr>"),
+        output,
+    ])
+
+
 def interactive_chat(
     model: TransformerLM,
     tokenizer: LLMTokenizer,
@@ -120,14 +230,17 @@ def interactive_chat(
     top_p: float = 0.9,
     repetition_penalty: float = 1.0,
 ):
-    """Interactive multi-turn chat loop in the terminal.
+    """Interactive multi-turn chat loop in the terminal (a front-end for ``ChatSession``).
 
-    The conversation so far (prompts and replies) is kept as token IDs and fed back
-    as context on every turn, truncated from the left to fit the model's context
-    window. ``clear`` resets the history.
+    ``clear`` resets the history; ``/temp X`` ``/topk N`` ``/topp X`` ``/rep X`` adjust
+    sampling at runtime; ``quit`` exits.
     """
-    device = next(model.parameters()).device
-    history: List[int] = []
+    session = ChatSession(
+        model, tokenizer, max_new_tokens=max_new_tokens, temperature=temperature,
+        top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty,
+    )
+    commands = {"/temp": ("temperature", float), "/topk": ("top_k", int),
+                "/topp": ("top_p", float), "/rep": ("repetition_penalty", float)}
 
     print("=" * 60)
     print("Interactive Chat (type 'quit' to exit, 'clear' to reset)")
@@ -150,45 +263,25 @@ def interactive_chat(
             print("Goodbye!")
             break
         if prompt.lower() == "clear":
-            history = []
+            session.clear()
             print("Chat cleared.")
             continue
 
-        # Slash-commands let users adjust sampling parameters at runtime without
-        # restarting the session.
         if prompt.startswith("/"):
             parts = prompt.split()
+            spec = commands.get(parts[0])
+            if spec is None:
+                print("Unknown command. Use /temp, /topk, /topp, /rep")
+                continue
+            attr, cast = spec
             try:
-                if parts[0] == "/temp":
-                    temperature = float(parts[1]); print(f"Temperature set to {temperature}")
-                elif parts[0] == "/topk":
-                    top_k = int(parts[1]); print(f"Top-k set to {top_k}")
-                elif parts[0] == "/topp":
-                    top_p = float(parts[1]); print(f"Top-p set to {top_p}")
-                elif parts[0] == "/rep":
-                    repetition_penalty = float(parts[1]); print(f"Repetition penalty set to {repetition_penalty}")
-                else:
-                    print("Unknown command. Use /temp, /topk, /topp, /rep")
+                setattr(session, attr, cast(parts[1]))
+                print(f"{attr} set to {getattr(session, attr)}")
             except (IndexError, ValueError):
                 print(f"Usage: {parts[0]} <value>")
             continue
 
-        # Context = BOS + conversation so far + new prompt (+ a newline separator).
-        turn_ids = tokenizer.encode(prompt + "\n", add_bos=False)
-        context_ids = [tokenizer.bos_id] + history + turn_ids
-        new_ids = generate_ids(
-            model, tokenizer, context_ids,
-            max_new_tokens=max_new_tokens, temperature=temperature, top_k=top_k, top_p=top_p,
-            repetition_penalty=repetition_penalty, device=device,
-        )
-        history = history + turn_ids + new_ids
-        # Keep the rolling history bounded to the model's context window.
-        max_history = max(1, model.config.max_seq_len - max_new_tokens - 1)
-        if len(history) > max_history:
-            history = history[-max_history:]
-
-        response = clean_generated_text(tokenizer.decode(new_ids, skip_special=True))
-        print(f"\nModel: {response}")
+        print(f"\nModel: {session.reply(prompt)}")
 
 
 # ──────────────────────────────────────────────
