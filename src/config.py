@@ -160,6 +160,35 @@ class TrainConfig:
     ])
 
 
+@dataclass
+class MoEConfig:
+    """Shape of a post-hoc Mixture-of-Experts graft (see ``src/moe.py``).
+
+    Kept separate from ``ModelConfig`` on purpose: ``TransformerLM(config)`` always builds
+    the dense skeleton (so a base checkpoint's weights load first), and the MoE layers are
+    grafted on afterwards. Stored in checkpoints under ``ckpt["moe"]``.
+    """
+
+    expert_layers: list          # block indices whose FFN becomes a SparseMoE, e.g. list(range(24, 32))
+    n_experts: int = 1           # experts per MoE layer
+    top_k: int = 1               # experts activated per token (<= n_experts)
+    warm_start: bool = True      # initialise every expert from the dense FFN it replaces
+
+    def __post_init__(self):
+        if not isinstance(self.expert_layers, (list, tuple)) or not self.expert_layers:
+            raise ValueError("expert_layers must be a non-empty list of layer indices")
+        layers = [int(i) for i in self.expert_layers]
+        if any(i < 0 for i in layers):
+            raise ValueError(f"expert_layers must be non-negative, got {layers}")
+        if len(set(layers)) != len(layers):
+            raise ValueError(f"expert_layers contains duplicates: {layers}")
+        self.expert_layers = sorted(layers)
+        if self.n_experts < 1:
+            raise ValueError(f"n_experts must be >= 1, got {self.n_experts}")
+        if not 1 <= self.top_k <= self.n_experts:
+            raise ValueError(f"top_k ({self.top_k}) must be between 1 and n_experts ({self.n_experts})")
+
+
 # ──────────────────────────────────────────────
 # Preset model configs
 # ──────────────────────────────────────────────

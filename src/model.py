@@ -370,6 +370,13 @@ class TransformerLM(nn.Module):
 
         result = {"logits": logits, "kv_cache": new_kv_cache}
 
+        # Mixture-of-Experts layers (src/moe.py) expose a load-balance loss on the
+        # module; sum them here so the trainer can add aux_loss_coeff * aux_loss.
+        # Duck-typed on purpose: dense models never get the key.
+        aux = [layer.ffn.aux_loss for layer in self.layers if hasattr(layer.ffn, "aux_loss")]
+        if aux:
+            result["aux_loss"] = torch.stack(aux).sum()
+
         if targets is not None:
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
@@ -511,4 +518,8 @@ class TransformerLM(nn.Module):
             f"  Total params: {total:,} ({total / 1e6:.1f}M)",
             f"  Trainable params: {trainable:,} ({trainable / 1e6:.1f}M)",
         ]
+        moe = [(i, layer.ffn) for i, layer in enumerate(self.layers) if hasattr(layer.ffn, "n_experts")]
+        if moe:
+            _, first = moe[0]
+            lines.append(f"  MoE layers: {[i for i, _ in moe]} (n_experts={first.n_experts}, top_k={first.top_k})")
         return "\n".join(lines)
