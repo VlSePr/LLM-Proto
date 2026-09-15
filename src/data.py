@@ -9,9 +9,13 @@ Run ``python -m src.data --config configs/data.yaml`` to build the shards.
 """
 
 import glob
+import hashlib
 import itertools
 import json
 import os
+import re
+import tempfile
+from datetime import datetime, timezone
 import numpy as np
 import torch
 import yaml
@@ -189,6 +193,197 @@ def _val_every_from_processing(proc: Dict[str, Any], default: int) -> int:
     return default
 
 
+def processing_params(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve the ``processing`` block of a data config into tokenizer kwargs.
+
+    Returns ``{"output_dir", "max_tokens", "shard_size", "val_every"}`` with the
+    same defaults ``tokenize_and_save`` uses.  Shared by the CLI and the notebook
+    so both read ``val_every`` / ``shard_size`` the same way.
+    """
+    proc = cfg.get("processing", {}) or {}
+    max_tokens = proc.get("max_tokens")
+    return {
+        "output_dir": proc.get("output_dir", "data"),
+        "max_tokens": int(max_tokens) if max_tokens else None,
+        "shard_size": int(proc.get("shard_size", 100_000_000)),
+        "val_every": _val_every_from_processing(proc, 200),
+    }
+
+
+# ──────────────────────────────────────────────
+# Cache fingerprint & manifest
+# ──────────────────────────────────────────────
+#
+# Tokenized shards are expensive to build, so they are cached locally and on
+# Google Drive.  A cache is identified by a *fingerprint*: a hash of everything
+# that determines the shard contents (tokenizer, source files, split/shard
+# parameters).  ``manifest.json`` next to the shards records the fingerprint and
+# the expected size of every file, which is what a cache lookup validates.
+
+FORMAT_VERSION = 1            # Bump when the .bin layout, doc filter, BOS/EOS policy or split rule changes
+MANIFEST_NAME = "manifest.json"
+GDRIVE_CACHE_SUBDIR = "tokenized"
+_SHARD_RE = re.compile(r"^train_\d{4}\.bin$")
+
+
+def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _canonical_hash(obj: Any) -> str:
+    payload = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _describe_files(base: str, paths: List[str]) -> List[Dict[str, Any]]:
+    """Content descriptors for *paths*, with names relative to *base* (posix separators)."""
+    out = []
+    for p in paths:
+        rel = os.path.relpath(p, base).replace(os.sep, "/")
+        out.append({"path": rel, "bytes": os.path.getsize(p), "sha256": _sha256_file(p)})
+    return out
+
+
+def normalize_sources(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Reduce a list of source dicts to what actually determines the tokenized output.
+
+    Local sources (``text_dir`` / ``jsonl``) are described by the relative name,
+    size and content hash of every file they contain — the absolute path is
+    deliberately left out so a corpus cloned into ``/content/LLM-Proto`` on Colab
+    and ``C:\\...\\LLM-Proto`` locally produce the same fingerprint.  HuggingFace
+    sources are described by their identity only (name/subset/split/text_field).
+    Order is preserved because the train/val split depends on document order.
+    """
+    normalized = []
+    for src in sources:
+        src_type = src.get("type", "huggingface")
+        if src_type == "huggingface":
+            normalized.append({
+                "type": "huggingface",
+                "name": src.get("name"),
+                "subset": src.get("subset"),
+                "split": src.get("split", "train"),
+                "text_field": src.get("text_field", "text"),
+            })
+        elif src_type == "text_dir":
+            path = src.get("path", "")
+            if not os.path.isdir(path):
+                normalized.append({"type": "text_dir", "missing": True, "files": []})
+                continue
+            files = []
+            for root, _, names in os.walk(path):
+                for fname in names:
+                    if not fname.startswith("."):
+                        files.append(os.path.join(root, fname))
+            files.sort()
+            normalized.append({"type": "text_dir", "files": _describe_files(path, files)})
+        elif src_type == "jsonl":
+            path = src.get("path", "")
+            text_field = src.get("text_field", "text")
+            if os.path.isfile(path):
+                base, files = os.path.dirname(path), [path]
+            elif os.path.isdir(path):
+                base = path
+                files = sorted(glob.glob(os.path.join(path, "**", "*.jsonl"), recursive=True))
+            else:
+                normalized.append({"type": "jsonl", "missing": True, "files": [], "text_field": text_field})
+                continue
+            normalized.append({"type": "jsonl", "text_field": text_field,
+                               "files": _describe_files(base, files)})
+        else:
+            raise ValueError(f"Unknown source type: {src_type}. "
+                             f"Supported: {list(_SOURCE_ITERATORS.keys())}")
+    return normalized
+
+
+def compute_fingerprint(
+    tokenizer_path: str,
+    sources: List[Dict[str, Any]],
+    shard_size: int,
+    val_every: int,
+    max_tokens: Optional[int],
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Return ``(fingerprint, inputs)`` for a tokenization run.
+
+    The fingerprint is a sha256 over the canonical JSON of *inputs*; any change
+    to the tokenizer file, the source data or the shard/split parameters yields
+    a different value.  Cost is one sequential read of the local corpus, which is
+    negligible next to BPE encoding.
+    """
+    inputs = {
+        "format_version": FORMAT_VERSION,
+        "tokenizer_sha256": _sha256_file(os.path.join(tokenizer_path, "tokenizer.json")),
+        "shard_size": int(shard_size),
+        "val_every": int(val_every),
+        "max_tokens": int(max_tokens) if max_tokens else None,
+        "sources": normalize_sources(sources),
+    }
+    return _canonical_hash(inputs), inputs
+
+
+def write_manifest(output_dir: str, manifest: Dict[str, Any]) -> str:
+    path = os.path.join(output_dir, MANIFEST_NAME)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    return path
+
+
+def read_manifest(data_dir: str) -> Optional[Dict[str, Any]]:
+    """Parsed ``manifest.json`` from *data_dir*, or None if missing/unreadable."""
+    path = os.path.join(data_dir, MANIFEST_NAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def validate_local_cache(data_dir: str, fingerprint: str) -> Tuple[bool, str]:
+    """Check that *data_dir* holds a complete cache for *fingerprint*.
+
+    Returns ``(True, "ok")`` or ``(False, reason)``.
+    """
+    manifest = read_manifest(data_dir)
+    if manifest is None:
+        return False, "no manifest"
+    if manifest.get("format_version") != FORMAT_VERSION:
+        return False, "format_version mismatch"
+    if manifest.get("fingerprint") != fingerprint:
+        return False, "fingerprint mismatch"
+    for entry in manifest.get("files", []):
+        path = os.path.join(data_dir, entry["name"])
+        if not os.path.isfile(path):
+            return False, f"missing {entry['name']}"
+        actual = os.path.getsize(path)
+        if actual != entry["bytes"]:
+            return False, f"size mismatch {entry['name']}: {actual} != {entry['bytes']}"
+    return True, "ok"
+
+
+def _clear_shards(output_dir: str) -> int:
+    """Delete shard files and the manifest from *output_dir*; return the count removed.
+
+    Only ``train_NNNN.bin``, ``val.bin`` and ``manifest.json`` are touched so
+    unrelated files (raw corpora, notes) in the same directory survive.
+    """
+    if not os.path.isdir(output_dir):
+        return 0
+    removed = 0
+    for name in os.listdir(output_dir):
+        if _SHARD_RE.match(name) or name in ("val.bin", MANIFEST_NAME):
+            os.remove(os.path.join(output_dir, name))
+            removed += 1
+    return removed
+
+
 def tokenize_and_save(
     tokenizer_path: str = "tokenizer_data",
     output_dir: str = "data",
@@ -201,7 +396,8 @@ def tokenize_and_save(
     dataset_name: str = "HuggingFaceFW/fineweb-edu",
     dataset_subset: str = "sample-10BT",
     split: str = "train",
-):
+    write_manifest_file: bool = True,
+) -> Dict[str, Any]:
     """
     Tokenize text from one or more sources and save as packed binary shards.
 
@@ -220,10 +416,13 @@ def tokenize_and_save(
     Train/val split: every ``val_every``-th document goes to validation.
     This interleaved split ensures the val set is representative of the full data
     distribution, rather than being biased by document ordering.
+
+    Any shards left in ``output_dir`` from a previous run are removed first, so a
+    smaller corpus can never leave stale higher-numbered shards behind.  A
+    ``manifest.json`` describing the result (fingerprint, file sizes, token
+    counts) is written last and also returned.
     """
     from .tokenizer import LLMTokenizer
-
-    os.makedirs(output_dir, exist_ok=True)
 
     # Load tokenizer
     tok = LLMTokenizer(tokenizer_path)
@@ -235,22 +434,25 @@ def tokenize_and_save(
     if sources is None and config_path is not None:
         cfg = load_data_config(config_path)
         sources = cfg.get("sources", [])
-        proc = cfg.get("processing", {}) or {}
-        max_tokens = max_tokens or proc.get("max_tokens")
-        shard_size = int(proc.get("shard_size", shard_size))
-        output_dir = proc.get("output_dir", output_dir)
-        val_every = _val_every_from_processing(proc, val_every)
-        os.makedirs(output_dir, exist_ok=True)
+        proc = processing_params(cfg)
+        max_tokens = max_tokens or proc["max_tokens"]
+        shard_size = proc["shard_size"]
+        output_dir = proc["output_dir"]
+        val_every = proc["val_every"]
+    if not sources:
+        # Legacy: single HuggingFace dataset, routed through the regular iterator
+        sources = [{"type": "huggingface", "name": dataset_name,
+                    "subset": dataset_subset, "split": split}]
 
-    if sources:
-        print(f"Tokenizing from {len(sources)} source(s)...")
-        text_iter = iter_texts_from_sources(sources)
-    else:
-        # Legacy: single HuggingFace dataset
-        from datasets import load_dataset
-        print(f"Streaming {dataset_name}/{dataset_subset}...")
-        ds = load_dataset(dataset_name, dataset_subset, split=split, streaming=True)
-        text_iter = (s.get("text", "") for s in ds)
+    fingerprint, inputs = compute_fingerprint(tokenizer_path, sources, shard_size, val_every, max_tokens)
+
+    os.makedirs(output_dir, exist_ok=True)
+    stale = _clear_shards(output_dir)
+    if stale:
+        print(f"Removed {stale} stale file(s) from {output_dir}")
+
+    print(f"Tokenizing from {len(sources)} source(s)...")
+    text_iter = iter_texts_from_sources(sources)
 
     # Tokenize and write to shards
     shard_idx = 0
@@ -262,6 +464,17 @@ def tokenize_and_save(
 
     val_buffer: list = []
     val_tokens = 0
+    files: List[Dict[str, Any]] = []   # manifest entries, in write order
+
+    def _flush_shard() -> None:
+        nonlocal shard_idx, buf_pos
+        name = f"train_{shard_idx:04d}.bin"
+        shard_path = os.path.join(output_dir, name)
+        buffer[:buf_pos].tofile(shard_path)
+        print(f"  Saved {shard_path} ({buf_pos:,} tokens)")
+        files.append({"name": name, "bytes": os.path.getsize(shard_path), "tokens": buf_pos})
+        shard_idx += 1
+        buf_pos = 0
 
     for doc_idx, text in enumerate(tqdm(text_iter, desc="Tokenizing")):
         if not text or len(text) < 50:
@@ -294,32 +507,173 @@ def tokenize_and_save(
                 token_count += take
                 pos += take
                 if buf_pos >= shard_size:
-                    shard_path = os.path.join(output_dir, f"train_{shard_idx:04d}.bin")
-                    buffer[:buf_pos].tofile(shard_path)
-                    print(f"  Saved {shard_path} ({buf_pos:,} tokens)")
-                    shard_idx += 1
-                    buf_pos = 0
+                    _flush_shard()
 
         if max_tokens and token_count >= max_tokens:
             break
 
     # Flush remaining train tokens
-    n_train_shards = shard_idx
     if buf_pos > 0:
-        shard_path = os.path.join(output_dir, f"train_{shard_idx:04d}.bin")
-        buffer[:buf_pos].tofile(shard_path)
-        print(f"  Saved {shard_path} ({buf_pos:,} tokens)")
-        n_train_shards += 1
+        _flush_shard()
+    n_train_shards = shard_idx
 
     # Save validation set
     if val_buffer:
         val_path = os.path.join(output_dir, "val.bin")
         np.array(val_buffer, dtype=np.uint16).tofile(val_path)
         print(f"  Saved {val_path} ({val_tokens:,} tokens)")
+        files.append({"name": "val.bin", "bytes": os.path.getsize(val_path), "tokens": val_tokens})
 
     total = token_count + val_tokens
     print(f"Done! Total tokens: {total:,} (train: {token_count:,}, val: {val_tokens:,})")
     print(f"Shards: {n_train_shards} train + {1 if val_buffer else 0} val")
+
+    manifest = {
+        "format_version": FORMAT_VERSION,
+        "fingerprint": fingerprint,
+        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "tokenizer": {"vocab_size": tok.vocab_size, "sha256": inputs["tokenizer_sha256"]},
+        "params": {"shard_size": int(shard_size), "val_every": int(val_every),
+                   "max_tokens": inputs["max_tokens"]},
+        "sources": inputs["sources"],
+        "files": files,
+        "train_tokens": token_count,
+        "val_tokens": val_tokens,
+        "n_train_shards": n_train_shards,
+    }
+    if write_manifest_file:
+        print(f"  Wrote {write_manifest(output_dir, manifest)}")
+    return manifest
+
+
+# ──────────────────────────────────────────────
+# Cache orchestration: local → Google Drive → tokenize
+# ──────────────────────────────────────────────
+
+def _remote_cache_folder(fingerprint: str, root_folder_id: str, credentials_path: str,
+                         create: bool) -> Optional[str]:
+    """Drive handle for ``<root>/tokenized/<fp12>``, or None when absent and not creating."""
+    from . import gdrive
+    sub = gdrive.resolve_subfolder(root_folder_id, GDRIVE_CACHE_SUBDIR, credentials_path, create=create)
+    if sub is None:
+        return None
+    return gdrive.resolve_subfolder(sub, fingerprint[:12], credentials_path, create=create)
+
+
+def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_id: str,
+                                credentials_path: str) -> Dict[str, Any]:
+    """Fetch a cached tokenization from Drive into *output_dir*.
+
+    Raises ``FileNotFoundError`` when Drive has no matching cache and
+    ``RuntimeError`` when a downloaded file does not match its manifest entry.
+    The local manifest is written last, so a partially fetched directory is
+    never mistaken for a valid cache.
+    """
+    from . import gdrive
+    folder = _remote_cache_folder(fingerprint, root_folder_id, credentials_path, create=False)
+    if folder is None:
+        raise FileNotFoundError(f"no '{GDRIVE_CACHE_SUBDIR}/{fingerprint[:12]}' folder on Drive")
+
+    with tempfile.TemporaryDirectory() as td:
+        gdrive.download_from_gdrive(MANIFEST_NAME, folder, td, credentials_path)
+        remote = read_manifest(td)
+    if remote is None:
+        raise FileNotFoundError("remote manifest is unreadable")
+    if remote.get("fingerprint") != fingerprint or remote.get("format_version") != FORMAT_VERSION:
+        raise FileNotFoundError("remote manifest does not match the requested fingerprint")
+
+    os.makedirs(output_dir, exist_ok=True)
+    _clear_shards(output_dir)
+    total_bytes = 0
+    for entry in remote.get("files", []):
+        path = gdrive.download_from_gdrive(entry["name"], folder, output_dir, credentials_path)
+        actual = os.path.getsize(path)
+        if actual != entry["bytes"]:
+            raise RuntimeError(f"size mismatch after download: {entry['name']} ({actual} != {entry['bytes']})")
+        total_bytes += actual
+    write_manifest(output_dir, remote)
+    print(f"[data cache] Downloaded {len(remote.get('files', []))} file(s), "
+          f"{total_bytes / 1e6:.1f} MB from Google Drive")
+    return remote
+
+
+def _upload_cache_to_gdrive(manifest: Dict[str, Any], output_dir: str, root_folder_id: str,
+                            credentials_path: str) -> None:
+    """Upload shards then the manifest (last) to ``<root>/tokenized/<fp12>``."""
+    from . import gdrive
+    folder = _remote_cache_folder(manifest["fingerprint"], root_folder_id, credentials_path, create=True)
+    for entry in manifest["files"]:
+        gdrive.upload_to_gdrive(os.path.join(output_dir, entry["name"]), folder, credentials_path)
+    gdrive.upload_to_gdrive(os.path.join(output_dir, MANIFEST_NAME), folder, credentials_path)
+    print(f"[data cache] Uploaded {len(manifest['files'])} file(s) to Google Drive "
+          f"({GDRIVE_CACHE_SUBDIR}/{manifest['fingerprint'][:12]})")
+
+
+def ensure_tokenized_data(
+    tokenizer_path: str,
+    output_dir: str,
+    sources: List[Dict[str, Any]],
+    max_tokens: Optional[int] = None,
+    shard_size: int = 100_000_000,
+    val_every: int = 200,
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
+    force: bool = False,
+) -> str:
+    """
+    Make sure *output_dir* holds tokenized shards for the given inputs.
+
+    Lookup order:
+      1. Local cache — ``manifest.json`` in *output_dir* matches the fingerprint
+         and every listed file is present with the right size.
+      2. Google Drive — ``<gdrive_folder_id>/tokenized/<fingerprint>/`` (only when
+         ``gdrive_folder_id`` is set); downloaded into *output_dir*.
+      3. Tokenize from scratch, then upload the result to Drive (best effort —
+         a failed upload is reported but never aborts the run).
+
+    ``force=True`` skips both caches and re-tokenizes.  Returns *output_dir*.
+    """
+    fingerprint, _ = compute_fingerprint(tokenizer_path, sources, shard_size, val_every, max_tokens)
+    print(f"[data cache] Fingerprint {fingerprint[:12]} for {len(sources)} source(s)")
+
+    if not force:
+        ok, reason = validate_local_cache(output_dir, fingerprint)
+        if ok:
+            print(f"[data cache] Local cache hit in {output_dir} — skipping tokenization")
+            return output_dir
+        print(f"[data cache] Local cache miss ({reason})")
+
+        if gdrive_folder_id:
+            try:
+                _download_cache_from_gdrive(fingerprint, output_dir, gdrive_folder_id, gdrive_credentials_path)
+                ok, reason = validate_local_cache(output_dir, fingerprint)
+                if ok:
+                    print(f"[data cache] Google Drive cache hit — restored into {output_dir}")
+                    return output_dir
+                print(f"[data cache] Downloaded cache failed validation ({reason})")
+            except FileNotFoundError as e:
+                print(f"[data cache] Not on Google Drive ({e})")
+            except Exception as e:
+                print(f"[data cache] ! Google Drive download failed: {e}")
+    else:
+        print("[data cache] force=True — re-tokenizing")
+
+    print("[data cache] Tokenizing from sources...")
+    manifest = tokenize_and_save(
+        tokenizer_path=tokenizer_path, output_dir=output_dir, sources=sources,
+        max_tokens=max_tokens, shard_size=shard_size, val_every=val_every,
+    )
+    if manifest["n_train_shards"] == 0:
+        raise RuntimeError(
+            f"Tokenization produced no training tokens — check the data sources: {sources}"
+        )
+
+    if gdrive_folder_id:
+        try:
+            _upload_cache_to_gdrive(manifest, output_dir, gdrive_folder_id, gdrive_credentials_path)
+        except Exception as e:
+            print(f"[data cache] ! Google Drive upload failed: {e}")
+    return output_dir
 
 
 def find_train_shards(data_dir: str) -> List[str]:
@@ -665,14 +1019,34 @@ def main():
     parser.add_argument("--tokenizer_path", type=str, default=None,
                         help="Tokenizer directory (default: tokenizer.save_path from the config)")
     parser.add_argument("--max_tokens", type=int, default=None, help="Override processing.max_tokens")
+    parser.add_argument("--gdrive_folder_id", type=str, default=None,
+                        help="Override cache.gdrive_folder_id (Colab: folder name; local: Drive folder ID)")
+    parser.add_argument("--gdrive_credentials", type=str, default=None,
+                        help="Override cache.gdrive_credentials_path (service-account JSON)")
+    parser.add_argument("--no_gdrive", action="store_true", help="Skip the Google Drive cache")
+    parser.add_argument("--force", action="store_true", help="Re-tokenize even if a valid cache exists")
     args = parser.parse_args()
 
     cfg = load_data_config(args.config)
     tokenizer_path = args.tokenizer_path or (cfg.get("tokenizer", {}) or {}).get("save_path", "tokenizer_data")
-    tokenize_and_save(
+    proc = processing_params(cfg)
+    cache = cfg.get("cache", {}) or {}
+    folder_id = "" if args.no_gdrive else (
+        args.gdrive_folder_id if args.gdrive_folder_id is not None else cache.get("gdrive_folder_id", "")
+    )
+    credentials = (args.gdrive_credentials if args.gdrive_credentials is not None
+                   else cache.get("gdrive_credentials_path", ""))
+
+    ensure_tokenized_data(
         tokenizer_path=tokenizer_path,
-        max_tokens=args.max_tokens,
-        config_path=args.config,
+        output_dir=proc["output_dir"],
+        sources=cfg.get("sources", []),
+        max_tokens=args.max_tokens or proc["max_tokens"],
+        shard_size=proc["shard_size"],
+        val_every=proc["val_every"],
+        gdrive_folder_id=folder_id or "",
+        gdrive_credentials_path=credentials or "",
+        force=args.force,
     )
 
 

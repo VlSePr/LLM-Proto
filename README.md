@@ -35,9 +35,18 @@ python scripts/train_tokenizer.py            # uses configs/data.yaml; the outpu
 ### 3. Build the token shards
 
 ```bash
-python -m src.data --config configs/data.yaml            # writes data/train_NNNN.bin + data/val.bin
+python -m src.data --config configs/data.yaml            # writes data/train_NNNN.bin + data/val.bin + manifest.json
 python -m src.data --config configs/data.yaml --max_tokens 100000000   # cap the corpus size
+python -m src.data --config configs/data.yaml --force    # re-tokenize even if a valid cache exists
+python -m src.data --config configs/data.yaml --gdrive_folder_id LLM   # cache the shards on Google Drive
+python -m src.data --config configs/data.yaml --no_gdrive              # ignore the Drive cache for this run
 ```
+
+Shards are cached. Every run computes a fingerprint of the tokenizer, the source files and the
+processing settings; if `data/manifest.json` matches and every shard has the recorded size, nothing is
+re-tokenized. With `cache.gdrive_folder_id` set (or `--gdrive_folder_id`), a local miss falls back to
+`<folder>/tokenized/<fingerprint>/` on Google Drive, and freshly built shards are uploaded there.
+An existing `data/` without a manifest is re-tokenized once.
 
 ### 4. Train a model
 
@@ -152,7 +161,8 @@ Place your data in `data/custom/`:
 - **Plain text:** Add `.txt` files to `data/custom/txt/`
 - **JSONL:** Add `.jsonl` files (one `{"text": "..."}` per line) to `data/custom/jsonl/`
 
-Then enable the corresponding source in `configs/data.yaml` and rerun `python -m src.data`.
+Then enable the corresponding source in `configs/data.yaml` and rerun `python -m src.data`. Any change
+to the files (or to the tokenizer) changes the cache fingerprint, so the shards are rebuilt automatically.
 
 ## Training on vast.ai
 

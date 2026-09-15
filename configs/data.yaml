@@ -15,6 +15,14 @@ processing:
   shard_size: 100000000       # Tokens per binary shard file
   val_every: 200              # Every N-th document goes to validation (1/200 = 0.5%)
 
+# Consumed by ensure_tokenized_data / python -m src.data
+# Tokenized shards are cached on Google Drive under <gdrive_folder_id>/tokenized/<fingerprint>/
+# and downloaded instead of re-tokenized when the tokenizer, sources and processing
+# settings are unchanged. Leave empty to disable; override with --gdrive_folder_id / --no_gdrive.
+cache:
+  gdrive_folder_id: ""        # Colab: folder name under MyDrive (e.g. "LLM"); local: Drive folder ID from the URL
+  gdrive_credentials_path: "" # Service-account JSON (API mode only; ignored on Colab)
+
 # ─── Data Sources ───
 # Each source has:
 #   type:   "huggingface" | "text_dir" | "jsonl"

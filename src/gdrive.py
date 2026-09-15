@@ -1,15 +1,20 @@
 """
-Google Drive backup for checkpoints.
+Google Drive backup for checkpoints and tokenized data.
 
 Two modes (chosen automatically based on runtime environment):
   - **Colab**: mounts Google Drive via ``drive.mount()`` and copies files
     to ``/content/drive/MyDrive/<folder_id>/``.  No API credentials needed;
     uses the authenticated Colab session directly.
     ``folder_id`` is the **folder name** under My Drive (created automatically).
+    Nested names such as ``"LLM/tokenized"`` are allowed.
   - **Local / vast.ai**: uses the Drive REST API v3 with a service-account JSON
     or Application Default Credentials. This requires a one-time credential setup
     but works anywhere (SSH servers, CI, cloud VMs).
     ``folder_id`` is the real Drive folder **ID** (the 33-char hash from the URL).
+
+``resolve_subfolder`` hides the difference: given a parent folder and a name it
+returns whatever the current mode uses as a folder handle (a nested path on
+Colab, a folder ID in API mode).
 """
 
 import os
@@ -29,13 +34,23 @@ def _is_colab() -> bool:
     return "google.colab" in sys.modules
 
 
-def _colab_folder(folder_id: str) -> str:
-    """Mount Drive (once) and return the local path for *folder_id*."""
+def _ensure_colab_mount() -> None:
+    """Mount Drive at ``/content/drive`` if it is not mounted yet."""
     from google.colab import drive
     if not os.path.ismount(_COLAB_MOUNT):
         drive.mount(_COLAB_MOUNT)
+
+
+def _colab_folder(folder_id: str, create: bool = True) -> str:
+    """Mount Drive (once) and return the local path for *folder_id*.
+
+    With ``create=False`` the directory is not created, so callers can probe
+    for an existing folder without leaving empty directories on Drive.
+    """
+    _ensure_colab_mount()
     path = os.path.join(_COLAB_MOUNT, "MyDrive", folder_id)
-    os.makedirs(path, exist_ok=True)
+    if create:
+        os.makedirs(path, exist_ok=True)
     return path
 
 
@@ -89,9 +104,64 @@ def _find_file(service, name: str, folder_id: str) -> Optional[str]:
     return files[0]["id"] if files else None
 
 
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def _find_folder(service, name: str, parent_id: str) -> Optional[str]:
+    """Return the ID of sub-folder *name* under *parent_id*, else None.
+
+    Drive allows several folders with the same name; the oldest one is
+    returned so repeated calls are deterministic.
+    """
+    query = (
+        f"'{parent_id}' in parents and name = '{name}' "
+        f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
+    )
+    resp = (
+        service.files()
+        .list(q=query, fields="files(id)", orderBy="createdTime")
+        .execute()
+    )
+    files = resp.get("files", [])
+    return files[0]["id"] if files else None
+
+
 # ──────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────
+
+def resolve_subfolder(
+    parent_folder_id: str,
+    name: str,
+    credentials_path: str = "",
+    create: bool = True,
+) -> Optional[str]:
+    """
+    Return a folder handle for sub-folder *name* inside *parent_folder_id*.
+
+    Colab — the nested folder name ``"<parent>/<name>"`` (usable as ``folder_id``
+    in every other function here).  API mode — the Drive folder ID.
+
+    With ``create=True`` the folder is created when missing; with
+    ``create=False`` a missing folder yields ``None`` and nothing is created.
+    """
+    # ── Colab: nested directory under MyDrive ──
+    if _is_colab():
+        nested = f"{parent_folder_id}/{name}"
+        path = _colab_folder(nested, create=create)
+        if not create and not os.path.isdir(path):
+            return None
+        return nested
+
+    # ── API mode ──
+    service = _get_service(credentials_path)
+    folder_id = _find_folder(service, name, parent_folder_id)
+    if folder_id or not create:
+        return folder_id
+    metadata = {"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_folder_id]}
+    result = service.files().create(body=metadata, fields="id").execute()
+    return result["id"]
+
 
 def upload_to_gdrive(
     local_path: str,
@@ -220,21 +290,32 @@ def download_from_gdrive(
     credentials_path: str = "",
 ) -> str:
     """
-    Download a checkpoint file from Google Drive to *local_dir*.
+    Download a file from Google Drive to *local_dir*.
+
+    The transfer goes to ``<filename>.part`` and is renamed into place only
+    when complete, so an interrupted download never leaves a truncated file
+    that looks like the real thing.
 
     Raises:
         FileNotFoundError: If the file doesn't exist on Drive.
     """
     # ── Colab: filesystem copy ──
     if _is_colab():
-        src = os.path.join(_colab_folder(folder_id), filename)
+        src = os.path.join(_colab_folder(folder_id, create=False), filename)
         if not os.path.exists(src):
             raise FileNotFoundError(
                 f"'{filename}' not found in Google Drive folder '{folder_id}'"
             )
         os.makedirs(local_dir, exist_ok=True)
         dest = os.path.join(local_dir, filename)
-        shutil.copy2(src, dest)
+        part = dest + ".part"
+        try:
+            shutil.copy2(src, part)
+            os.replace(part, dest)
+        except BaseException:
+            if os.path.exists(part):
+                os.remove(part)
+            raise
         return dest
 
     # ── API mode ──
@@ -249,13 +330,20 @@ def download_from_gdrive(
 
     os.makedirs(local_dir, exist_ok=True)
     local_path = os.path.join(local_dir, filename)
+    part = local_path + ".part"
 
     request = service.files().get_media(fileId=file_id)
-    with open(local_path, "wb") as fh:
-        downloader = MediaIoBaseDownload(fh, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
+    try:
+        with open(part, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        os.replace(part, local_path)
+    except BaseException:
+        if os.path.exists(part):
+            os.remove(part)
+        raise
 
     return local_path
 

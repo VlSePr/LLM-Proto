@@ -10,6 +10,10 @@ processing:
   shard_size: 2048
   val_every: 3
 
+cache:
+  gdrive_folder_id: ""
+  gdrive_credentials_path: ""
+
 sources:
   - type: text_dir
     path: tests/fixtures/corpus

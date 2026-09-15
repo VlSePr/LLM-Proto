@@ -519,9 +519,28 @@ The `tokenize_and_save()` function:
 2. **Tokenizes** each document (adding BOS + EOS tokens)
 3. **Splits** into train/val: every Nth document goes to validation (controlled by `val_every`)
 4. **Packs** token IDs into fixed-size binary shards (`shard_size` tokens each, default 100M)
-5. **Saves** as `train_0000.bin`, `train_0001.bin`, ... and `val.bin`
+5. **Saves** as `train_0000.bin`, `train_0001.bin`, ... and `val.bin` (stale shards from a previous run are removed first)
+6. **Writes `manifest.json`** — fingerprint, tokenizer hash, per-file byte sizes and token counts
 
 **Binary format:** Flat array of `uint16` values. Why uint16? Vocabulary is 32K, which fits in 16 bits (max 65,535). This halves storage compared to int32.
+
+#### 6.2.1 Shard cache (local + Google Drive)
+
+`ensure_tokenized_data()` wraps `tokenize_and_save()` and is what the CLI and the notebook call:
+
+1. **Fingerprint** — sha256 over `tokenizer.json`, the relative name/size/content hash of every source
+   file (HuggingFace sources contribute only `name/subset/split/text_field`), `shard_size`, `val_every`,
+   `max_tokens` and a `FORMAT_VERSION`. Absolute paths are excluded so Colab and a local checkout agree.
+2. **Local hit** — `manifest.json` in `output_dir` has the same fingerprint and every listed file exists
+   with the recorded size → return immediately.
+3. **Drive hit** — with `cache.gdrive_folder_id` set, look for `<folder>/tokenized/<fingerprint[:12]>/`,
+   download the manifest, then each shard (to `.part`, renamed when complete, size-checked), and write the
+   local manifest last so a half-fetched directory is never mistaken for a cache.
+4. **Tokenize** — otherwise build the shards, then upload them and the manifest (last) to the same Drive
+   folder. Drive failures are printed, never fatal.
+
+`--force` (CLI) or `FORCE_TOKENIZE = True` (notebook) skips both lookups. Each fingerprint is a separate
+Drive folder, so old ones accumulate until deleted by hand.
 
 ### 6.3 Memory-Mapped Dataset
 
@@ -903,7 +922,8 @@ For non-Colab environments:
 | Function | Purpose |
 |---|---|
 | `upload_to_gdrive(local_path, folder_id, creds)` | Upload a file (create or update) |
-| `download_from_gdrive(filename, folder_id, local_dir, creds)` | Download a file by name |
+| `download_from_gdrive(filename, folder_id, local_dir, creds)` | Download a file by name (atomic: `.part` then rename) |
+| `resolve_subfolder(parent, name, creds, create=True)` | Folder handle for `parent/name` — nested name on Colab, folder ID in API mode; `create=False` returns `None` when absent |
 | `list_remote_checkpoints(folder_id, creds)` | List all `.pt` files in folder |
 | `cleanup_remote_checkpoints(folder_id, keep_n, creds)` | Remove old `step_*.pt` files |
 | `reset_service()` | Clear cached API client (re-authenticate) |
@@ -924,18 +944,21 @@ processing:
   output_dir: data               # Where binary shards go
   max_tokens:                    # null = process everything
   shard_size: 100000000          # 100M tokens per shard file
-  val_ratio: 0.005               # 0.5% of docs → validation
+  val_every: 200                 # Every N-th document → validation (legacy val_ratio also accepted)
 
-sources:                         # List of data sources
+cache:
+  gdrive_folder_id: ""           # Drive folder for the shard cache (Colab: name; API: folder ID); "" = off
+  gdrive_credentials_path: ""    # Service-account JSON (API mode only)
+
+sources:                         # List of data sources, processed in order
   - type: huggingface
     name: HuggingFaceFW/fineweb-edu
     subset: sample-10BT
     split: train
     text_field: text
-    weight: 1.0
 ```
 
-Sources can be mixed. The `weight` field controls relative sampling ratios when combining multiple sources.
+Sources can be mixed (`huggingface`, `text_dir`, `jsonl`); mixing weights are not implemented.
 
 ### 13.2 `training.yaml` — Training Hyperparameters
 
