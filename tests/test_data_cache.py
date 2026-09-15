@@ -237,6 +237,32 @@ def test_ensure_raises_when_no_tokens_produced(tmp_path, tmp_tokenizer_dir):
         _run(tmp_tokenizer_dir, tmp_path / "out", _src(empty))
 
 
+def test_ensure_empty_sources_use_one_fingerprint_everywhere(tmp_path, tmp_tokenizer_dir, corpus,
+                                                             fake_drive, monkeypatch):
+    """No sources -> the default dataset is fingerprinted before the Drive probe, so caches round-trip."""
+    seen = []
+    real_iter = data.iter_texts_from_sources
+
+    def fake_iter(sources):                      # stand in for the HuggingFace stream
+        seen.append(sources)
+        return real_iter(_src(corpus))
+
+    monkeypatch.setattr(data, "iter_texts_from_sources", fake_iter)
+    out = tmp_path / "out"
+    _run(tmp_tokenizer_dir, out, [], gdrive_folder_id="LLM")
+    assert seen == [data.default_sources()]
+    fp = _fp(tmp_tokenizer_dir, data.default_sources())
+    assert read_manifest(str(out))["fingerprint"] == fp
+    assert validate_local_cache(str(out), fp) == (True, "ok")
+    assert read_manifest(str(_remote(fake_drive, out)))["fingerprint"] == fp
+
+    _forbid_tokenize(monkeypatch)
+    _run(tmp_tokenizer_dir, out, [], gdrive_folder_id="LLM")          # local cache hit
+    shutil.rmtree(out)
+    _run(tmp_tokenizer_dir, out, [], gdrive_folder_id="LLM")          # Drive cache hit
+    assert validate_local_cache(str(out), fp) == (True, "ok")
+
+
 def test_ensure_no_gdrive_calls_when_folder_empty(tmp_path, tmp_tokenizer_dir, corpus, monkeypatch):
     monkeypatch.setattr(gdrive, "upload_to_gdrive", lambda *a, **k: pytest.fail("upload called"))
     monkeypatch.setattr(gdrive, "resolve_subfolder", lambda *a, **k: pytest.fail("resolve called"))
