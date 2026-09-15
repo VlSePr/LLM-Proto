@@ -1,0 +1,7 @@
+# Tiny model for CPU smoke tests
+vocab_size: 512
+dim: 32
+n_layers: 2
+n_heads: 4
+n_kv_heads: 2
+max_seq_len: 32

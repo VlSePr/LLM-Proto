@@ -5,15 +5,15 @@ Utilities: checkpointing, logging, environment detection, learning rate scheduli
 import os
 import sys
 import time
-import json
 import random
 import glob
+import shutil
 import torch
 import numpy as np
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 from dataclasses import asdict
 
-from .config import ModelConfig, TrainConfig
+from .config import ModelConfig, TrainConfig, config_from_dict
 
 
 # ──────────────────────────────────────────────
@@ -57,6 +57,7 @@ def get_dtype(precision: str = "auto") -> torch.dtype:
 
 def should_compile(setting: str = "auto") -> bool:
     """Determine if torch.compile should be used."""
+    setting = str(setting).lower()
     if setting == "true":
         return True
     if setting == "false":
@@ -67,6 +68,14 @@ def should_compile(setting: str = "auto") -> bool:
         and hasattr(torch, "compile")
         and detect_environment() != "colab"  # Colab T4 has issues with compile
     )
+
+
+def make_grad_scaler(enabled: bool):
+    """GradScaler that works across torch versions (torch.amp.GradScaler is 2.3+)."""
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    from torch.cuda.amp import GradScaler  # pragma: no cover (older torch)
+    return GradScaler(enabled=enabled)
 
 
 # ──────────────────────────────────────────────
@@ -110,66 +119,161 @@ def get_lr(step: int, warmup_steps: int, max_steps: int, peak_lr: float, min_lr:
     if step >= max_steps:
         return min_lr
     # Cosine decay: progress goes from 0.0 to 1.0 over the decay phase
-    progress = (step - warmup_steps) / (max_steps - warmup_steps)
-    cosine = 0.5 * (1.0 + np.cos(np.pi * progress))  # Ranges from 1.0 down to 0.0
-    return min_lr + (peak_lr - min_lr) * cosine
+    progress = (step - warmup_steps) / max(1, max_steps - warmup_steps)
+    cosine = 0.5 * (1.0 + float(np.cos(np.pi * progress)))  # Ranges from 1.0 down to 0.0
+    return float(min_lr + (peak_lr - min_lr) * cosine)
+
+
+# ──────────────────────────────────────────────
+# Model wrappers (torch.compile)
+# ──────────────────────────────────────────────
+
+_COMPILE_PREFIX = "_orig_mod."
+
+
+def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying module of a ``torch.compile``d model (or the model itself)."""
+    return getattr(model, "_orig_mod", model)
+
+
+def strip_compile_prefix(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove the ``_orig_mod.`` prefix that ``torch.compile`` adds to state-dict keys."""
+    return {
+        (k[len(_COMPILE_PREFIX):] if k.startswith(_COMPILE_PREFIX) else k): v
+        for k, v in state_dict.items()
+    }
 
 
 # ──────────────────────────────────────────────
 # Checkpointing
 # ──────────────────────────────────────────────
 
+def resolve_checkpoint_filename(resume: str) -> str:
+    """Map a resume spec ('latest', 'best', 'step_N', or a custom name) to a filename."""
+    if resume == "latest":
+        return "latest.pt"
+    if resume == "best":
+        return "best.pt"
+    if resume.endswith(".pt"):
+        return resume
+    return f"{resume}.pt"
+
+
+def _rng_state_for_save() -> Dict[str, Any]:
+    """Collect RNG states in a form that ``torch.load(weights_only=True)`` accepts."""
+    np_state = np.random.get_state()  # ('MT19937', ndarray[624] uint32, pos, has_gauss, cached_gaussian)
+    state = {
+        "python": random.getstate(),
+        "numpy": (np_state[0], torch.from_numpy(np_state[1].copy()), int(np_state[2]),
+                  int(np_state[3]), float(np_state[4])),
+        "torch": torch.random.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        # Save RNG state for ALL GPUs (even if single-GPU) to support future multi-GPU resume
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _to_tuple(obj):
+    """Recursively convert lists back to tuples (random.setstate needs tuples)."""
+    if isinstance(obj, (list, tuple)):
+        return tuple(_to_tuple(o) for o in obj)
+    return obj
+
+
+def _restore_rng_state(rng: Dict[str, Any]) -> None:
+    if "python" in rng:
+        random.setstate(_to_tuple(rng["python"]))
+    if "numpy" in rng:
+        np_state = rng["numpy"]
+        keys = np_state[1]
+        if isinstance(keys, torch.Tensor):
+            keys = keys.cpu().numpy()
+        np.random.set_state((np_state[0], np.asarray(keys, dtype=np.uint32), int(np_state[2]),
+                             int(np_state[3]), float(np_state[4])))
+    if "torch" in rng:
+        # Cast to uint8 in case the state was saved on a different device/dtype
+        torch.random.set_rng_state(rng["torch"].cpu().to(torch.uint8))
+    if "cuda" in rng and torch.cuda.is_available():
+        saved = [s.cpu().to(torch.uint8) for s in rng["cuda"]]
+        n = min(len(saved), torch.cuda.device_count())
+        for i in range(n):
+            torch.cuda.set_rng_state(saved[i], device=i)
+
+
+def load_checkpoint_file(path: str, device: torch.device = torch.device("cpu")) -> dict:
+    """``torch.load`` a checkpoint, preferring the safe ``weights_only=True`` path."""
+    try:
+        return torch.load(path, map_location=device, weights_only=True)
+    except Exception as e:  # older checkpoints contain numpy objects
+        print(f"  ! weights_only load failed ({type(e).__name__}); falling back to full unpickling "
+              f"for {path}. Only load checkpoints you trust.")
+        return torch.load(path, map_location=device, weights_only=False)
+
+
 def save_checkpoint(
     model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: Optional[torch.optim.Optimizer],
     step: int,
-    loss: float,
+    loss: Optional[float],
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_dir: str,
     is_best: bool = False,
-    **kwargs,
-):
+    *,
+    best_val_loss: Optional[float] = None,
+    val_loss: Optional[float] = None,
+    scaler_state: Optional[dict] = None,
+    epoch: int = 0,
+    batches_in_epoch: int = 0,
+    tokens_seen: Optional[int] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Save a full training checkpoint.
-    Includes: model, optimizer, step, loss, configs, RNG states.
+    Includes: model, optimizer, GradScaler, step/epoch/data position, best val loss,
+    configs, and RNG states — everything needed for an exact resume.
+
+    The model state dict is always saved *without* the ``torch.compile`` prefix so the
+    file loads into a plain ``TransformerLM`` (inference CLIs, Colab without compile).
     """
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     checkpoint = {
         "step": step,
-        "epoch": kwargs.get("epoch", 0),
-        "loss": loss,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
+        "epoch": epoch,
+        "batches_in_epoch": batches_in_epoch,
+        "tokens_seen": tokens_seen,
+        "loss": float(loss) if loss is not None else None,
+        "val_loss": val_loss,
+        "best_val_loss": best_val_loss,
+        "model_state_dict": strip_compile_prefix(unwrap_model(model).state_dict()),
+        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
+        "scaler_state_dict": scaler_state,
         "model_config": asdict(model_config),
         "train_config": asdict(train_config),
-        # Save all RNG states so we can resume training with the *exact* same random
-        # sequence. Without this, resumed training would see different data order and
-        # dropout masks, making results non-reproducible.
-        "rng_state": {
-            "python": random.getstate(),
-            "numpy": np.random.get_state(),
-            "torch": torch.random.get_rng_state(),
-        },
+        # RNG states let a resumed run continue the *exact* same random sequence
+        # (dropout masks, sampling), making results reproducible across interruptions.
+        "rng_state": _rng_state_for_save(),
     }
-    if torch.cuda.is_available():
-        # Save RNG state for ALL GPUs (even if single-GPU) to support future multi-GPU resume
-        checkpoint["rng_state"]["cuda"] = torch.cuda.get_rng_state_all()
+    if extra:
+        checkpoint.update(extra)
 
     path = os.path.join(checkpoint_dir, f"step_{step}.pt")
-    torch.save(checkpoint, path)
+    tmp_path = path + ".tmp"
+    torch.save(checkpoint, tmp_path)
+    os.replace(tmp_path, path)  # atomic: never leave a half-written step_N.pt behind
 
     # "latest.pt" is a convenience alias: always points to the most recent checkpoint.
     # This way, resume="latest" always works without knowing the exact step number.
     latest_path = os.path.join(checkpoint_dir, "latest.pt")
-    torch.save(checkpoint, latest_path)
+    shutil.copyfile(path, latest_path)
 
+    best_path = os.path.join(checkpoint_dir, "best.pt")
     if is_best:
-        best_path = os.path.join(checkpoint_dir, "best.pt")
-        torch.save(checkpoint, best_path)
+        shutil.copyfile(path, best_path)
 
-    # Cleanup old checkpoints (keep last N + best)
+    # Cleanup old checkpoints (keep last N + best + latest)
     cleanup_checkpoints(checkpoint_dir, train_config.keep_last_n_checkpoints)
 
     # ── Google Drive backup ──
@@ -188,15 +292,17 @@ def save_checkpoint(
                     train_config.keep_last_n_checkpoints,
                     train_config.gdrive_credentials_path,
                 )
-            print(f"  → Backed up checkpoint to Google Drive")
+            print("  -> Backed up checkpoint to Google Drive")
         except Exception as e:
-            print(f"  ⚠ Google Drive backup failed: {e}")
+            print(f"  ! Google Drive backup failed: {e}")
 
     return path
 
 
 def cleanup_checkpoints(checkpoint_dir: str, keep_n: int):
-    """Keep only the last N step checkpoints + best + latest."""
+    """Keep only the last N step checkpoints (+ best + latest). keep_n <= 0 keeps everything."""
+    if keep_n is None or keep_n <= 0:
+        return
     pattern = os.path.join(checkpoint_dir, "step_*.pt")
     step_files = sorted(glob.glob(pattern), key=os.path.getmtime)
 
@@ -213,32 +319,30 @@ def load_checkpoint(
     device: torch.device = torch.device("cpu"),
     gdrive_folder_id: str = "",
     gdrive_credentials_path: str = "",
+    scaler=None,
+    restore_rng: bool = True,
 ) -> dict:
     """
-    Load a checkpoint and restore model/optimizer state.
+    Load a checkpoint and restore model/optimizer/scaler state.
 
     If the checkpoint is not found locally but gdrive_folder_id is set,
     it is downloaded from Google Drive first.
 
     Args:
         checkpoint_dir: Directory containing checkpoints
-        resume: "latest", "best", or "step_N"
-        model: Model to load weights into
+        resume: "latest", "best", "step_N", or a custom name
+        model: Model to load weights into (plain or torch.compile'd)
         optimizer: Optimizer to load state into (optional)
         device: Device to load tensors to
         gdrive_folder_id: Google Drive folder to fetch from (optional)
         gdrive_credentials_path: Service-account JSON path (optional)
+        scaler: GradScaler to restore (optional)
+        restore_rng: Restore RNG states (True for training resume; False for inference)
 
     Returns:
         Checkpoint dict with step, loss, etc.
     """
-    if resume == "latest":
-        filename = "latest.pt"
-    elif resume == "best":
-        filename = "best.pt"
-    else:
-        filename = f"{resume}.pt"
-
+    filename = resolve_checkpoint_filename(resume)
     path = os.path.join(checkpoint_dir, filename)
 
     # Try downloading from Google Drive when the local file is missing
@@ -249,7 +353,7 @@ def load_checkpoint(
             path = download_from_gdrive(
                 filename, gdrive_folder_id, checkpoint_dir, gdrive_credentials_path,
             )
-            print(f"  → Downloaded to {path}")
+            print(f"  -> Downloaded to {path}")
         except Exception as e:
             raise FileNotFoundError(
                 f"Checkpoint '{filename}' not found locally or on Google Drive: {e}"
@@ -259,27 +363,60 @@ def load_checkpoint(
         raise FileNotFoundError(f"Checkpoint not found: {path}")
 
     print(f"Loading checkpoint from {path}...")
-    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    checkpoint = load_checkpoint_file(path, device)
 
-    model.load_state_dict(checkpoint["model_state_dict"])
-    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+    unwrap_model(model).load_state_dict(strip_compile_prefix(checkpoint["model_state_dict"]))
+    if optimizer is not None and checkpoint.get("optimizer_state_dict"):
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scaler is not None and checkpoint.get("scaler_state_dict") and scaler.is_enabled():
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
-    # Restore RNG states for bit-exact reproducibility when resuming.
-    # Each RNG type (Python, NumPy, PyTorch CPU/CUDA) must be restored independently.
-    rng = checkpoint.get("rng_state", {})
-    if "python" in rng:
-        random.setstate(rng["python"])
-    if "numpy" in rng:
-        np.random.set_state(rng["numpy"])
-    if "torch" in rng:
-        # Cast to uint8 in case the state was saved on a different device/dtype
-        torch.random.set_rng_state(rng["torch"].cpu().to(torch.uint8))
-    if "cuda" in rng and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all([s.cpu().to(torch.uint8) for s in rng["cuda"]])
+    if restore_rng:
+        _restore_rng_state(checkpoint.get("rng_state", {}))
 
-    print(f"Resumed from step {checkpoint['step']} (loss={checkpoint['loss']:.4f})")
+    loss = checkpoint.get("loss")
+    loss_str = f"{loss:.4f}" if isinstance(loss, (int, float)) else "n/a"
+    print(f"Resumed from step {checkpoint['step']} (loss={loss_str})")
     return checkpoint
+
+
+def build_model_from_checkpoint(
+    checkpoint_path: str,
+    device: Optional[torch.device] = None,
+    model_config_name: Optional[str] = None,
+) -> Tuple[torch.nn.Module, dict]:
+    """
+    Build a ``TransformerLM`` from a checkpoint file for inference/evaluation.
+
+    The architecture is taken from ``ckpt["model_config"]`` (always present for
+    checkpoints written by ``save_checkpoint``). ``model_config_name`` (a preset
+    name or YAML path) is only used as a fallback for files without one.
+    Returns ``(model, checkpoint_dict)``; the checkpoint is loaded exactly once
+    and RNG states are *not* restored.
+    """
+    from .config import get_model_config, load_model_config
+    from .model import TransformerLM
+
+    if device is None:
+        device = get_device()
+    ckpt = load_checkpoint_file(checkpoint_path, device)
+
+    if ckpt.get("model_config"):
+        model_config = config_from_dict(ModelConfig, dict(ckpt["model_config"]), checkpoint_path)
+    elif model_config_name:
+        if os.path.isfile(model_config_name):
+            model_config = load_model_config(model_config_name)
+        else:
+            model_config = get_model_config(model_config_name)
+    else:
+        raise ValueError(
+            f"{checkpoint_path} has no 'model_config' entry; pass --model <preset|yaml> explicitly."
+        )
+
+    model = TransformerLM(model_config).to(device)
+    model.load_state_dict(strip_compile_prefix(ckpt["model_state_dict"]))
+    model.eval()
+    return model, ckpt
 
 
 def has_checkpoint(checkpoint_dir: str, resume: str, gdrive_folder_id: str = "", gdrive_credentials_path: str = "") -> bool:
@@ -287,13 +424,7 @@ def has_checkpoint(checkpoint_dir: str, resume: str, gdrive_folder_id: str = "",
     if not resume:
         return False
 
-    if resume == "latest":
-        filename = "latest.pt"
-    elif resume == "best":
-        filename = "best.pt"
-    else:
-        filename = f"{resume}.pt"
-
+    filename = resolve_checkpoint_filename(resume)
     if os.path.exists(os.path.join(checkpoint_dir, filename)):
         return True
 
@@ -334,6 +465,7 @@ class MetricsTracker:
 
     def log(self, metrics: dict, step: int):
         """Log metrics to wandb and internal history."""
+        metrics = dict(metrics)
         metrics["step"] = step
         self.history.append(metrics)
         if self.use_wandb and self.wandb:
@@ -365,6 +497,8 @@ class Timer:
     def step(self):
         now = time.time()
         self.step_times.append(now)
+        if len(self.step_times) > 1000:
+            del self.step_times[:-1000]
 
     def tokens_per_sec(self, tokens_since_last: int) -> float:
         if len(self.step_times) < 2:

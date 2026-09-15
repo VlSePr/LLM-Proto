@@ -1,0 +1,19 @@
+# Data config for the CPU smoke test (see README "Smoke test")
+tokenizer:
+  vocab_size: 512
+  num_samples: 1000
+  save_path: smoke_run/tokenizer
+
+processing:
+  output_dir: smoke_run/data
+  max_tokens:
+  shard_size: 2048
+  val_every: 3
+
+cache:
+  gdrive_folder_id: ""
+  gdrive_credentials_path: ""
+
+sources:
+  - type: text_dir
+    path: tests/fixtures/corpus

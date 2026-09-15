@@ -1,9 +1,10 @@
 # Default training config
 # Override any field via CLI flags: --batch_size 64 --peak_lr 3e-4
+#
+# Machine-specific settings (Google Drive folder, resume target) do not belong
+# here. Pass them on the CLI or keep a gitignored configs/local.yaml.
 
 # --- Data ---
-dataset_name: HuggingFaceFW/fineweb-edu
-dataset_subset: sample-10BT
 data_dir: data
 tokenizer_path: tokenizer_data
 
@@ -34,15 +35,16 @@ checkpoint_dir: checkpoints
 save_every_steps: 500
 keep_last_n_checkpoints: 5
 
-# --- Google Drive backup ---
-backup_to_gdrive: true
-gdrive_folder_id: 'LLM'           # Colab: folder name under MyDrive. Local: real Drive folder ID from URL.
+# --- Google Drive backup (off by default) ---
+backup_to_gdrive: false
+gdrive_folder_id: ''              # Colab: folder name under MyDrive. API mode: real Drive folder ID from URL.
 gdrive_credentials_path: ''       # Path to service-account JSON (empty = default creds)
 gdrive_cleanup_remote: true       # Mirror keep_last_n on remote
 
 # --- Logging ---
 log_every_steps: 10
 eval_every_steps: 500
+eval_max_batches: 50
 generate_every_steps: 1000
 visualize_every_steps: 1000
 
@@ -55,12 +57,16 @@ use_wandb: true
 num_workers: 4
 use_compile: auto     # auto | true | false
 gradient_checkpointing: false
+min_seq_len: 256      # OOM retry floor: never truncate sequences below this length
 
 # --- Reproducibility ---
 seed: 42
 
 # --- Resume ---
-resume: 'Large'       # '' | latest | best | step_N | custom name (e.g. 'Large' → Large.pt)
+# '' = fresh start | latest | best | step_N | custom name (e.g. 'Large' -> checkpoints/Large.pt)
+resume: ''
+# When true, a missing checkpoint falls back to a fresh start instead of raising.
+resume_if_exists: false
 
 # --- Sample prompts ---
 sample_prompts:

@@ -7,7 +7,7 @@ Optimized for English text with byte-fallback.
 import os
 from typing import List, Optional
 
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
 
 
 # Special tokens used by the model:
@@ -29,9 +29,27 @@ class LLMTokenizer:
     """Wrapper around HuggingFace tokenizer with training and encode/decode methods."""
 
     def __init__(self, tokenizer_path: Optional[str] = None):
+        """Load a trained tokenizer from ``tokenizer_path`` (a directory containing
+        ``tokenizer.json``). Pass ``None`` to create an empty wrapper (used by ``train``).
+        """
         self.tokenizer: Optional[Tokenizer] = None
-        if tokenizer_path and os.path.exists(os.path.join(tokenizer_path, "tokenizer.json")):
+        self.bos_id: Optional[int] = None
+        self.eos_id: Optional[int] = None
+        self.pad_id: Optional[int] = None
+        self.im_start_id: Optional[int] = None
+        self.im_end_id: Optional[int] = None
+        if tokenizer_path:
+            tokenizer_file = os.path.join(tokenizer_path, "tokenizer.json")
+            if not os.path.isfile(tokenizer_file):
+                raise FileNotFoundError(
+                    f"Tokenizer not found: {tokenizer_file}. "
+                    "Train one with `python scripts/train_tokenizer.py` or pass the correct --tokenizer_path."
+                )
             self.load(tokenizer_path)
+
+    @property
+    def is_loaded(self) -> bool:
+        return self.tokenizer is not None
 
     @staticmethod
     def train(
@@ -120,7 +138,7 @@ class LLMTokenizer:
     def decode(self, ids: List[int], skip_special: bool = True) -> str:
         """Decode token IDs to text."""
         if skip_special:
-            special_ids = {self.bos_id, self.eos_id, self.pad_id, self.im_start_id, self.im_end_id}
+            special_ids = self.special_ids()
             ids = [i for i in ids if i not in special_ids]
         return self.tokenizer.decode(ids)
 
@@ -136,7 +154,14 @@ class LLMTokenizer:
 
     @property
     def vocab_size(self) -> int:
+        if self.tokenizer is None:
+            raise RuntimeError("Tokenizer is not loaded")
         return self.tokenizer.get_vocab_size()
+
+    def special_ids(self) -> set:
+        """Set of all special-token IDs (for filtering during decode)."""
+        return {i for i in (self.bos_id, self.eos_id, self.pad_id, self.im_start_id, self.im_end_id)
+                if i is not None}
 
     def id_to_token(self, id: int) -> Optional[str]:
         return self.tokenizer.id_to_token(id)

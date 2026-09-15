@@ -1,10 +1,46 @@
-data/
+# Generated data and model artifacts
+data/*
+!data/custom/
+data/custom/**/*
+!data/custom/**/.gitkeep
 checkpoints/
-tokenizer_data/*.model
-tokenizer_data/*.vocab
-wandb/
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
+logs/
+*.pt
+*.pth
 *.bin
 *.idx
+
+# Experiment tracking
+wandb/
+
+# Credentials and local overrides (never commit)
+.env
+*.env
+*credentials*.json
+service_account*.json
+client_secret*.json
+token.json
+configs/local.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Notebooks / editors / OS
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# CPU smoke-test output
+smoke_run/

@@ -1,0 +1,4 @@
+# Strip notebook outputs on commit. One-time setup after cloning:
+#   pip install nbstripout && nbstripout --install
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb

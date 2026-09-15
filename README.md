@@ -1,18 +1,19 @@
 # LLM-Proto
 
-A from-scratch LLaMA-style Transformer language model framework built with PyTorch. Train decoder-only language models from **30M to 1B+ parameters** using modern techniques.
+A from-scratch LLaMA-style Transformer language model framework built with PyTorch. Train decoder-only language models from **35M to 1.5B parameters** using modern techniques.
 
 ## Features
 
 - **LLaMA Architecture** — RMSNorm, Rotary Positional Embeddings (RoPE), SwiGLU FFN, Grouped Query Attention (GQA)
 - **Flash Attention** — via PyTorch 2.x `scaled_dot_product_attention`
 - **Mixed Precision** — automatic bf16/fp16 selection based on hardware
-- **KV-Cache Inference** — efficient autoregressive generation
+- **KV-Cache Inference** — efficient autoregressive generation with top-k / top-p / repetition penalty
+- **Exact Resume** — checkpoints carry optimizer, GradScaler, RNG, and data-stream position
 - **Multi-Source Data Pipeline** — HuggingFace streaming, local `.txt`, `.jsonl` files → packed binary shards
 - **BPE Tokenizer** — 32K vocabulary with byte-level fallback (HuggingFace `tokenizers` backend)
-- **Google Drive Backup** — automatic checkpoint sync (Colab mount or REST API)
+- **Google Drive Backup** — optional checkpoint sync (Colab mount or REST API)
 - **Weights & Biases** — experiment tracking, loss curves, sample generations, model visualizations
-- **5 Model Presets** — tiny (30M), small (125M), medium (350M), base (500M), large (1B)
+- **5 Model Presets** — tiny (35M), small (100M), medium (300M), base (470M), large (1.5B)
 - **Environment Support** — Google Colab, vast.ai, local GPU
 
 ## Quick Start
@@ -21,15 +22,33 @@ A from-scratch LLaMA-style Transformer language model framework built with PyTor
 
 ```bash
 pip install -r requirements.txt
+# for tests / linting:
+pip install -r requirements-dev.txt
 ```
 
 ### 2. Train the tokenizer
 
 ```bash
-python scripts/train_tokenizer.py
+python scripts/train_tokenizer.py            # uses configs/data.yaml; the output is committed in tokenizer_data/
 ```
 
-### 3. Train a model
+### 3. Build the token shards
+
+```bash
+python -m src.data --config configs/data.yaml            # writes data/train_NNNN.bin + data/val.bin + manifest.json
+python -m src.data --config configs/data.yaml --max_tokens 100000000   # cap the corpus size
+python -m src.data --config configs/data.yaml --force    # re-tokenize even if a valid cache exists
+python -m src.data --config configs/data.yaml --gdrive_folder_id LLM   # cache the shards on Google Drive
+python -m src.data --config configs/data.yaml --no_gdrive              # ignore the Drive cache for this run
+```
+
+Shards are cached. Every run computes a fingerprint of the tokenizer, the source files and the
+processing settings; if `data/manifest.json` matches and every shard has the recorded size, nothing is
+re-tokenized. With `cache.gdrive_folder_id` set (or `--gdrive_folder_id`), a local miss falls back to
+`<folder>/tokenized/<fingerprint>/` on Google Drive, and freshly built shards are uploaded there.
+An existing `data/` without a manifest is re-tokenized once.
+
+### 4. Train a model
 
 ```bash
 # Train the tiny model (good for prototyping)
@@ -38,24 +57,47 @@ python -m src.train --model tiny --config configs/training.yaml
 # Train a larger model with custom settings
 python -m src.train --model small --batch_size 16 --peak_lr 3e-4
 
-# Resume from a checkpoint
+# Resume from a checkpoint (raises if it does not exist; pass --resume '' to force a fresh start)
 python -m src.train --model medium --resume latest
+
+# Skip W&B / Google Drive for a local run
+python -m src.train --model tiny --no_wandb --no_gdrive
 ```
 
-### 4. Generate text
+Machine-specific settings (Drive folder, resume target) do not belong in `configs/training.yaml`;
+pass them on the CLI or keep a gitignored `configs/local.yaml` and point `--config` at it.
+
+### 5. Generate text
 
 ```bash
-# Single prompt
-python -m src.generate --checkpoint checkpoints/best.pt --model tiny --prompt "Once upon a time"
+# Single prompt (architecture is read from the checkpoint)
+python -m src.generate --checkpoint checkpoints/best.pt --prompt "Once upon a time"
 
-# Interactive chat
-python -m src.generate --checkpoint checkpoints/best.pt --model tiny
+# Interactive multi-turn chat
+python -m src.generate --checkpoint checkpoints/best.pt --repetition_penalty 1.2
 ```
 
-### 5. Evaluate
+### 6. Evaluate
 
 ```bash
-python -m src.evaluate --checkpoint checkpoints/best.pt --model tiny
+python -m src.evaluate --checkpoint checkpoints/best.pt --data_dir data
+```
+
+## Tests and smoke run
+
+```bash
+pytest -q                      # unit tests, CPU only, < 10 s
+```
+
+A full CPU pipeline run on a toy corpus (tokenizer → shards → train → resume → generate → evaluate):
+
+```bash
+python scripts/train_tokenizer.py --config tests/fixtures/data_smoke.yaml --force
+python -m src.data --config tests/fixtures/data_smoke.yaml
+python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtures/training_smoke.yaml --max_steps 10
+python -m src.train --model tests/fixtures/model_smoke.yaml --config tests/fixtures/training_smoke.yaml --max_steps 20 --resume latest
+python -m src.generate --checkpoint smoke_run/checkpoints/latest.pt --prompt "Alice was" --max_tokens 16
+python -m src.evaluate --checkpoint smoke_run/checkpoints/latest.pt --data_dir smoke_run/data --batch_size 2
 ```
 
 ## Project Structure
@@ -69,36 +111,48 @@ LLM-Proto/
 ├── src/                     # Core source code
 │   ├── model.py             # Transformer model (RMSNorm, RoPE, GQA, SwiGLU)
 │   ├── tokenizer.py         # BPE tokenizer training & inference
-│   ├── data.py              # Multi-source data pipeline → binary shards
+│   ├── data.py              # Multi-source data pipeline → binary shards (python -m src.data)
 │   ├── train.py             # Full training loop
 │   ├── generate.py          # Text generation with KV-cache
 │   ├── evaluate.py          # Validation metrics (loss, perplexity)
 │   ├── visualize.py         # Model internals visualization
-│   ├── config.py            # Configuration dataclasses & presets
+│   ├── config.py            # Configuration dataclasses, presets & validated YAML loading
 │   ├── utils.py             # Checkpointing, LR schedule, environment detection
 │   └── gdrive.py            # Google Drive checkpoint backup
 ├── scripts/                 # Automation scripts
 │   ├── train_tokenizer.py   # Standalone tokenizer training
 │   ├── run_training.sh      # tmux-based training launcher
 │   └── setup_vastai.sh      # vast.ai instance setup
+├── tests/                   # pytest suite + smoke-test fixtures
 ├── data/                    # Tokenized binary data (generated)
 │   └── custom/              # Your own txt/ and jsonl/ data
 ├── tokenizer_data/          # Trained tokenizer output
 ├── checkpoints/             # Model checkpoints (generated)
-├── LLM-proto.ipynb          # Training notebook (Colab-ready)
+├── LLM_proto.ipynb          # Training notebook (Colab-ready)
+├── LLM-expert.ipynb         # Mixture-of-Experts fine-tuning notebook
 ├── LLM-inference.ipynb      # Inference notebook
 └── requirements.txt         # Python dependencies
 ```
 
 ## Model Presets
 
+Parameter counts are exact for the default 32K vocabulary with tied embeddings.
+
 | Preset | Params | Dim | Layers | Heads (Q/KV) | Context | Recommended GPU |
 |--------|--------|-----|--------|--------------|---------|-----------------|
-| `tiny` | ~30M | 512 | 6 | 8/4 | 2048 | Any (T4, etc.) |
-| `small` | ~125M | 768 | 12 | 12/4 | 2048 | T4 16GB |
-| `medium` | ~350M | 1024 | 24 | 16/4 | 2048 | A10 24GB |
-| `base` | ~500M | 1280 | 24 | 20/4 | 2048 | A100 40GB |
-| `large` | ~1B | 2048 | 32 | 32/8 | 4096 | A100 80GB |
+| `tiny` | 35M | 512 | 6 | 8/4 | 2048 | Any (T4, etc.) |
+| `small` | 100M | 768 | 12 | 12/4 | 2048 | T4 16GB |
+| `medium` | 303M | 1024 | 24 | 16/4 | 2048 | A10 24GB |
+| `base` | 466M | 1280 | 24 | 20/4 | 2048 | A100 40GB |
+| `large` | 1.5B | 2048 | 32 | 32/8 | 4096 | A100 80GB |
+
+## Checkpoints
+
+`save_checkpoint` writes `checkpoints/step_N.pt` plus `latest.pt` and (when validation improved) `best.pt`.
+A checkpoint's `step` is the last completed optimizer step; resuming continues at `step + 1` with the
+optimizer, GradScaler, RNG states, epoch, and position within the epoch restored, so an interrupted
+run reproduces an uninterrupted one. Weights are saved without the `torch.compile` prefix, so any
+checkpoint loads in the inference CLIs and in environments where compile is disabled.
 
 ## Custom Data
 
@@ -107,7 +161,8 @@ Place your data in `data/custom/`:
 - **Plain text:** Add `.txt` files to `data/custom/txt/`
 - **JSONL:** Add `.jsonl` files (one `{"text": "..."}` per line) to `data/custom/jsonl/`
 
-Then enable the corresponding source in `configs/data.yaml`.
+Then enable the corresponding source in `configs/data.yaml` and rerun `python -m src.data`. Any change
+to the files (or to the tokenizer) changes the cache fingerprint, so the shards are rebuilt automatically.
 
 ## Training on vast.ai
 

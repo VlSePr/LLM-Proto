@@ -1,28 +1,37 @@
 # ─── Data Pipeline Configuration ───
 # Defines all data sources for tokenizer training and model training.
-# Sources are processed in order; use 'weight' to control mixing ratios.
+# Sources are processed in config order (mixing weights are not implemented yet).
 
+# Consumed by scripts/train_tokenizer.py
 tokenizer:
   vocab_size: 32000
-  num_samples: 50000          # Text samples for BPE tokenizer training
+  num_samples: 50000          # Text documents used for BPE tokenizer training
   save_path: tokenizer_data
 
+# Consumed by src/data.py (tokenize_and_save / python -m src.data)
 processing:
   output_dir: data
-  max_tokens:         # Total tokens to produce (null = unlimited)
+  max_tokens:                 # Total train tokens to produce (null = unlimited)
   shard_size: 100000000       # Tokens per binary shard file
-  val_ratio: 0.005            # Fraction of documents reserved for validation
+  val_every: 200              # Every N-th document goes to validation (1/200 = 0.5%)
+
+# Consumed by ensure_tokenized_data / python -m src.data
+# Tokenized shards are cached on Google Drive under <gdrive_folder_id>/tokenized/<fingerprint>/
+# and downloaded instead of re-tokenized when the tokenizer, sources and processing
+# settings are unchanged. Leave empty to disable; override with --gdrive_folder_id / --no_gdrive.
+cache:
+  gdrive_folder_id: ""        # Colab: folder name under MyDrive (e.g. "LLM"); local: Drive folder ID from the URL
+  gdrive_credentials_path: "" # Service-account JSON (API mode only; ignored on Colab)
 
 # ─── Data Sources ───
 # Each source has:
 #   type:   "huggingface" | "text_dir" | "jsonl"
-#   weight: Relative sampling weight when mixing sources (default: 1.0)
 #
 # HuggingFace source:
 #   name, subset, split, text_field
 #
 # Local text directory:
-#   path      — directory of .txt files (recursively scanned)
+#   path      — directory scanned recursively; all non-hidden files are read
 #
 # JSONL files:
 #   path      — single .jsonl file or directory of .jsonl files
@@ -34,31 +43,21 @@ sources:
     subset: sample-10BT
     split: train
     text_field: text
-    weight: 1.0
-
-
 
   # ── Uncomment to add your own data ──────────────────────────
-  - type: text_dir
-    path: data/custom/txt      # Put .txt files here
-    weight: 1.0
+  # - type: text_dir
+  #   path: data/custom/txt      # Put .txt files here
   #
   # - type: jsonl
   #   path: data/custom/jsonl     # Put .jsonl files here
   #   text_field: text            # JSON key with the text
-  #   weight: 1.0
 
-  # ── Google Drive data (Colab only) ─────────────────────────
-  # 1. Set ENABLE_GDRIVE = True and GDRIVE_DATA_DIR = "my-books" in Cell 2.
-  # 2. Cell 2b will mount Drive at /content/drive/MyDrive/
-  # 3. Uncomment the entry below and set the path to match your GDRIVE_DATA_DIR.
+  # ── Google Drive data (Colab) ───────────────────────────────
+  # After mounting Drive at /content/drive, point a source at your folder:
   #
   # - type: text_dir
-  #   path: /content/drive/MyDrive/my-books   # match GDRIVE_DATA_DIR in Cell 2
-  #   weight: 1.0
+  #   path: /content/drive/MyDrive/my-books
   #
-  # For .jsonl files on Drive:
   # - type: jsonl
   #   path: /content/drive/MyDrive/my-books
   #   text_field: text
-  #   weight: 1.0
