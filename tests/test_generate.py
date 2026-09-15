@@ -1,9 +1,9 @@
 import torch
 
-from src.generate import clean_generated_text, generate_text, generate_ids, load_model_for_inference
+from src.config import TrainConfig
+from src.generate import clean_generated_text, generate_ids, generate_text, load_model_for_inference
 from src.model import TransformerLM
 from src.utils import save_checkpoint
-from src.config import TrainConfig
 
 
 def test_clean_generated_text_only_strips_special_markup():

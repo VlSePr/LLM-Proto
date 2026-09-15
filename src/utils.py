@@ -2,19 +2,19 @@
 Utilities: checkpointing, logging, environment detection, learning rate scheduling.
 """
 
+import glob
 import os
+import random
+import shutil
 import sys
 import time
-import random
-import glob
-import shutil
-import torch
-import numpy as np
-from typing import Any, Dict, Optional, Tuple
 from dataclasses import asdict
+from typing import Any
+
+import numpy as np
+import torch
 
 from .config import ModelConfig, TrainConfig, config_from_dict
-
 
 # ──────────────────────────────────────────────
 # Environment detection
@@ -136,7 +136,7 @@ def unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     return getattr(model, "_orig_mod", model)
 
 
-def strip_compile_prefix(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+def strip_compile_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
     """Remove the ``_orig_mod.`` prefix that ``torch.compile`` adds to state-dict keys."""
     return {
         (k[len(_COMPILE_PREFIX):] if k.startswith(_COMPILE_PREFIX) else k): v
@@ -159,7 +159,7 @@ def resolve_checkpoint_filename(resume: str) -> str:
     return f"{resume}.pt"
 
 
-def _rng_state_for_save() -> Dict[str, Any]:
+def _rng_state_for_save() -> dict[str, Any]:
     """Collect RNG states in a form that ``torch.load(weights_only=True)`` accepts."""
     np_state = np.random.get_state()  # ('MT19937', ndarray[624] uint32, pos, has_gauss, cached_gaussian)
     state = {
@@ -181,7 +181,7 @@ def _to_tuple(obj):
     return obj
 
 
-def _restore_rng_state(rng: Dict[str, Any]) -> None:
+def _restore_rng_state(rng: dict[str, Any]) -> None:
     if "python" in rng:
         random.setstate(_to_tuple(rng["python"]))
     if "numpy" in rng:
@@ -201,7 +201,7 @@ def _restore_rng_state(rng: Dict[str, Any]) -> None:
             torch.cuda.set_rng_state(saved[i], device=i)
 
 
-def load_checkpoint_file(path: str, device: torch.device = torch.device("cpu")) -> dict:
+def load_checkpoint_file(path: str, device: torch.device | str = "cpu") -> dict:
     """``torch.load`` a checkpoint, preferring the safe ``weights_only=True`` path."""
     try:
         return torch.load(path, map_location=device, weights_only=True)
@@ -213,21 +213,21 @@ def load_checkpoint_file(path: str, device: torch.device = torch.device("cpu")) 
 
 def save_checkpoint(
     model: torch.nn.Module,
-    optimizer: Optional[torch.optim.Optimizer],
+    optimizer: torch.optim.Optimizer | None,
     step: int,
-    loss: Optional[float],
+    loss: float | None,
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_dir: str,
     is_best: bool = False,
     *,
-    best_val_loss: Optional[float] = None,
-    val_loss: Optional[float] = None,
-    scaler_state: Optional[dict] = None,
+    best_val_loss: float | None = None,
+    val_loss: float | None = None,
+    scaler_state: dict | None = None,
     epoch: int = 0,
     batches_in_epoch: int = 0,
-    tokens_seen: Optional[int] = None,
-    extra: Optional[Dict[str, Any]] = None,
+    tokens_seen: int | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> str:
     """
     Save a full training checkpoint.
@@ -279,7 +279,7 @@ def save_checkpoint(
     # ── Google Drive backup ──
     if train_config.backup_to_gdrive and train_config.gdrive_folder_id:
         try:
-            from .gdrive import upload_to_gdrive, cleanup_remote_checkpoints
+            from .gdrive import cleanup_remote_checkpoints, upload_to_gdrive
 
             upload_to_gdrive(path, train_config.gdrive_folder_id, train_config.gdrive_credentials_path)
             upload_to_gdrive(latest_path, train_config.gdrive_folder_id, train_config.gdrive_credentials_path)
@@ -315,8 +315,8 @@ def load_checkpoint(
     checkpoint_dir: str,
     resume: str,
     model: torch.nn.Module,
-    optimizer: Optional[torch.optim.Optimizer] = None,
-    device: torch.device = torch.device("cpu"),
+    optimizer: torch.optim.Optimizer | None = None,
+    device: torch.device | str = "cpu",
     gdrive_folder_id: str = "",
     gdrive_credentials_path: str = "",
     scaler=None,
@@ -357,7 +357,7 @@ def load_checkpoint(
         except Exception as e:
             raise FileNotFoundError(
                 f"Checkpoint '{filename}' not found locally or on Google Drive: {e}"
-            )
+            ) from e
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -382,9 +382,9 @@ def load_checkpoint(
 
 def build_model_from_checkpoint(
     checkpoint_path: str,
-    device: Optional[torch.device] = None,
-    model_config_name: Optional[str] = None,
-) -> Tuple[torch.nn.Module, dict]:
+    device: torch.device | None = None,
+    model_config_name: str | None = None,
+) -> tuple[torch.nn.Module, dict]:
     """
     Build a ``TransformerLM`` from a checkpoint file for inference/evaluation.
 
@@ -419,7 +419,9 @@ def build_model_from_checkpoint(
     return model, ckpt
 
 
-def has_checkpoint(checkpoint_dir: str, resume: str, gdrive_folder_id: str = "", gdrive_credentials_path: str = "") -> bool:
+def has_checkpoint(
+    checkpoint_dir: str, resume: str, gdrive_folder_id: str = "", gdrive_credentials_path: str = "",
+) -> bool:
     """Check if a resumable checkpoint exists locally or on Google Drive."""
     if not resume:
         return False
@@ -431,7 +433,7 @@ def has_checkpoint(checkpoint_dir: str, resume: str, gdrive_folder_id: str = "",
     # Check Google Drive
     if gdrive_folder_id:
         try:
-            from .gdrive import _get_service, _find_file
+            from .gdrive import _find_file, _get_service
             service = _get_service(gdrive_credentials_path)
             return _find_file(service, filename, gdrive_folder_id) is not None
         except Exception:

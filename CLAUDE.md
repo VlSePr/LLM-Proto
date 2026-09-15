@@ -14,7 +14,7 @@ before changing `model.py` or `train.py`.
 ## Commands
 
 The project venv is `.venv/` (Python 3.12, CPU-only torch on this machine). On Windows call
-`.venv/Scripts/python`. No `pyproject.toml`: there is no repo-level pytest or ruff config.
+`.venv/Scripts/python`. No `pyproject.toml`; lint config is `ruff.toml`, pytest uses defaults.
 
 ```bash
 pip install -r requirements-dev.txt          # includes requirements.txt + pytest, ruff, nbstripout
@@ -24,8 +24,7 @@ PYTHONIOENCODING=utf-8 python -m pytest -q
 python -m pytest tests/test_train_resume.py -q                       # one file
 python -m pytest tests/test_model.py::test_forward_shapes_and_loss -q  # one test
 
-ruff check src tests scripts    # NOTE: the tree is not ruff-clean (~180 findings, mostly UP/I
-                                # annotation & import-order rules). Do not run `ruff --fix` wholesale.
+ruff check src tests scripts    # must report zero findings; config is ruff.toml (E,F,W,I,UP,B; line-length 120)
 
 # Full CPU smoke pipeline on the toy corpus in tests/fixtures/corpus (writes to gitignored smoke_run/)
 python scripts/train_tokenizer.py --config tests/fixtures/data_smoke.yaml --force
@@ -49,8 +48,9 @@ Notebook outputs are stripped on commit via `.gitattributes` (`nbstripout --inst
 - `ModelConfig` and `TrainConfig` are dataclasses. `config_from_dict` **rejects unknown keys** and
   coerces scalars (PyYAML parses `3e-4` as a *string*, so numeric fields are converted explicitly).
   Adding a field means adding it to the dataclass; YAML files may omit fields but never add extras.
-- `--model` accepts a preset name (`tiny/small/medium/base/large`, defined in `MODEL_CONFIGS`) **or** a
-  YAML path. Precedence is CLI flag > `--config` YAML > dataclass defaults (`train.main()`).
+- `--model` accepts a preset name (`tiny/small/medium/base/large`, defined in `MODEL_CONFIGS`, the single
+  source of truth; there are no preset YAML files) **or** a YAML path for a custom architecture.
+  Precedence is CLI flag > `--config` YAML > dataclass defaults (`train.main()`).
 - Machine-specific values (Drive folder, resume target) must not go into `configs/training.yaml`;
   use CLI flags or a gitignored `configs/local.yaml`.
 

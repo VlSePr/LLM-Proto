@@ -5,13 +5,12 @@ Uses KV-cache for efficient autoregressive generation.
 """
 
 import re
+
 import torch
-from typing import List, Optional, Tuple
 
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer
-from .utils import get_device, build_model_from_checkpoint
-
+from .utils import build_model_from_checkpoint, get_device
 
 # Safety net for special-token *text* the model may have learned to emit verbatim
 # (e.g. "<|eot_id|>" from scraped chat transcripts). Real special tokens are already
@@ -27,9 +26,9 @@ def clean_generated_text(text: str) -> str:
 
 def load_model_for_inference(
     checkpoint_path: str,
-    model_config_name: Optional[str] = None,
-    device: Optional[torch.device] = None,
-) -> Tuple[TransformerLM, LLMTokenizer]:
+    model_config_name: str | None = None,
+    device: torch.device | None = None,
+) -> tuple[TransformerLM, LLMTokenizer]:
     """Load model and tokenizer for inference. Returns (model, tokenizer).
 
     The architecture comes from the checkpoint's ``model_config``; ``model_config_name``
@@ -51,14 +50,14 @@ def load_model_for_inference(
 def generate_ids(
     model: TransformerLM,
     tokenizer: LLMTokenizer,
-    prompt_ids: List[int],
+    prompt_ids: list[int],
     max_new_tokens: int = 256,
     temperature: float = 0.8,
     top_k: int = 50,
     top_p: float = 0.9,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
     repetition_penalty: float = 1.0,
-) -> List[int]:
+) -> list[int]:
     """Generate continuation token IDs for ``prompt_ids`` (prompt not included)."""
     if device is None:
         device = next(model.parameters()).device
@@ -93,7 +92,7 @@ def generate_text(
     temperature: float = 0.8,
     top_k: int = 50,
     top_p: float = 0.9,
-    device: Optional[torch.device] = None,
+    device: torch.device | None = None,
     repetition_penalty: float = 1.0,
     include_prompt: bool = False,
 ) -> str:
@@ -127,7 +126,7 @@ def interactive_chat(
     window. ``clear`` resets the history.
     """
     device = next(model.parameters()).device
-    history: List[int] = []
+    history: list[int] = []
 
     print("=" * 60)
     print("Interactive Chat (type 'quit' to exit, 'clear' to reset)")
@@ -160,13 +159,17 @@ def interactive_chat(
             parts = prompt.split()
             try:
                 if parts[0] == "/temp":
-                    temperature = float(parts[1]); print(f"Temperature set to {temperature}")
+                    temperature = float(parts[1])
+                    print(f"Temperature set to {temperature}")
                 elif parts[0] == "/topk":
-                    top_k = int(parts[1]); print(f"Top-k set to {top_k}")
+                    top_k = int(parts[1])
+                    print(f"Top-k set to {top_k}")
                 elif parts[0] == "/topp":
-                    top_p = float(parts[1]); print(f"Top-p set to {top_p}")
+                    top_p = float(parts[1])
+                    print(f"Top-p set to {top_p}")
                 elif parts[0] == "/rep":
-                    repetition_penalty = float(parts[1]); print(f"Repetition penalty set to {repetition_penalty}")
+                    repetition_penalty = float(parts[1])
+                    print(f"Repetition penalty set to {repetition_penalty}")
                 else:
                     print("Unknown command. Use /temp, /topk, /topp, /rep")
             except (IndexError, ValueError):

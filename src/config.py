@@ -3,10 +3,11 @@ Configuration dataclasses for model architecture and training.
 Change model size by swapping configs — zero code changes needed.
 """
 
-from dataclasses import dataclass, field, fields, asdict, replace
-from typing import Any, Dict, Optional
-import yaml
 import os
+from dataclasses import asdict, dataclass, field, fields, replace
+from typing import Any
+
+import yaml
 
 
 @dataclass
@@ -24,7 +25,7 @@ class ModelConfig:
     # Feed-forward network
     # SwiGLU FFN hidden dim. If None, computed as 2/3 × 4 × dim, rounded to multiple of 256
     # (see __post_init__ for the formula and rationale)
-    ffn_dim: Optional[int] = None
+    ffn_dim: int | None = None
 
     # Regularization
     dropout: float = 0.0           # 0 for pre-training (data is diverse enough); >0 for fine-tuning
@@ -84,10 +85,7 @@ class TrainConfig:
     """All training hyperparameters."""
 
     # --- Data ---
-    # Data sources are defined in configs/data.yaml; these two fields are kept
-    # for backward compatibility with older checkpoints and are otherwise unused.
-    dataset_name: str = "HuggingFaceFW/fineweb-edu"
-    dataset_subset: str = "sample-10BT"
+    # Data sources are defined in configs/data.yaml (see python -m src.data).
     data_dir: str = "data"
     tokenizer_path: str = "tokenizer_data"
 
@@ -119,8 +117,6 @@ class TrainConfig:
     checkpoint_dir: str = "checkpoints"
     save_every_steps: int = 500        # Frequent saves protect against crashes mid-training
     keep_last_n_checkpoints: int = 5   # Disk budget: keep last 5 + best validation checkpoint
-    save_to_hf_hub: bool = False       # Reserved: not implemented yet
-    hf_repo_id: str = ""               # Reserved: not implemented yet
 
     # --- Google Drive backup ---
     backup_to_gdrive: bool = False             # Upload checkpoints to Google Drive
@@ -224,7 +220,7 @@ def _coerce(value: Any, target: type, key: str, path: str) -> Any:
         try:
             return float(value)
         except ValueError:
-            raise ValueError(f"{path}: field '{key}' expects a float, got {value!r}")
+            raise ValueError(f"{path}: field '{key}' expects a float, got {value!r}") from None
     if target is int and not isinstance(value, bool):
         if isinstance(value, int):
             return value
@@ -232,7 +228,7 @@ def _coerce(value: Any, target: type, key: str, path: str) -> Any:
             try:
                 as_float = float(value)
             except ValueError:
-                raise ValueError(f"{path}: field '{key}' expects an int, got {value!r}")
+                raise ValueError(f"{path}: field '{key}' expects an int, got {value!r}") from None
             if as_float != int(as_float):
                 raise ValueError(f"{path}: field '{key}' expects an int, got {value!r}")
             return int(as_float)
@@ -241,7 +237,7 @@ def _coerce(value: Any, target: type, key: str, path: str) -> Any:
     return value
 
 
-def config_from_dict(cls, data: Optional[Dict[str, Any]], path: str = "<dict>"):
+def config_from_dict(cls, data: dict[str, Any] | None, path: str = "<dict>"):
     """Build a config dataclass from a dict, rejecting unknown keys and coercing scalars."""
     if data is None:
         data = {}
@@ -267,13 +263,13 @@ def save_config(config, path: str):
 
 def load_model_config(path: str) -> ModelConfig:
     """Load a ModelConfig from YAML file."""
-    with open(path, "r") as f:
+    with open(path) as f:
         data = yaml.safe_load(f)
     return config_from_dict(ModelConfig, data, path)
 
 
 def load_train_config(path: str) -> TrainConfig:
     """Load a TrainConfig from YAML file."""
-    with open(path, "r") as f:
+    with open(path) as f:
         data = yaml.safe_load(f)
     return config_from_dict(TrainConfig, data, path)

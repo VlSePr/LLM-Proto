@@ -5,10 +5,8 @@ Optimized for English text with byte-fallback.
 """
 
 import os
-from typing import List, Optional
 
-from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
-
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
 # Special tokens used by the model:
 # - bos/eos: mark sequence boundaries (critical for generation to know when to stop)
@@ -28,16 +26,16 @@ SPECIAL_TOKEN_LIST = list(SPECIAL_TOKENS.values())
 class LLMTokenizer:
     """Wrapper around HuggingFace tokenizer with training and encode/decode methods."""
 
-    def __init__(self, tokenizer_path: Optional[str] = None):
+    def __init__(self, tokenizer_path: str | None = None):
         """Load a trained tokenizer from ``tokenizer_path`` (a directory containing
         ``tokenizer.json``). Pass ``None`` to create an empty wrapper (used by ``train``).
         """
-        self.tokenizer: Optional[Tokenizer] = None
-        self.bos_id: Optional[int] = None
-        self.eos_id: Optional[int] = None
-        self.pad_id: Optional[int] = None
-        self.im_start_id: Optional[int] = None
-        self.im_end_id: Optional[int] = None
+        self.tokenizer: Tokenizer | None = None
+        self.bos_id: int | None = None
+        self.eos_id: int | None = None
+        self.pad_id: int | None = None
+        self.im_start_id: int | None = None
+        self.im_end_id: int | None = None
         if tokenizer_path:
             tokenizer_file = os.path.join(tokenizer_path, "tokenizer.json")
             if not os.path.isfile(tokenizer_file):
@@ -126,7 +124,7 @@ class LLMTokenizer:
         self.im_start_id = self.tokenizer.token_to_id(SPECIAL_TOKENS["im_start"])
         self.im_end_id = self.tokenizer.token_to_id(SPECIAL_TOKENS["im_end"])
 
-    def encode(self, text: str, add_bos: bool = True, add_eos: bool = False) -> List[int]:
+    def encode(self, text: str, add_bos: bool = True, add_eos: bool = False) -> list[int]:
         """Encode text to token IDs."""
         ids = self.tokenizer.encode(text).ids
         if add_bos and self.bos_id is not None:
@@ -135,14 +133,14 @@ class LLMTokenizer:
             ids = ids + [self.eos_id]
         return ids
 
-    def decode(self, ids: List[int], skip_special: bool = True) -> str:
+    def decode(self, ids: list[int], skip_special: bool = True) -> str:
         """Decode token IDs to text."""
         if skip_special:
             special_ids = self.special_ids()
             ids = [i for i in ids if i not in special_ids]
         return self.tokenizer.decode(ids)
 
-    def encode_batch(self, texts: List[str], add_bos: bool = True, add_eos: bool = False) -> List[List[int]]:
+    def encode_batch(self, texts: list[str], add_bos: bool = True, add_eos: bool = False) -> list[list[int]]:
         """Batch encode multiple texts. Uses the Rust-backed parallel encoder for speed."""
         results = self.tokenizer.encode_batch(texts)
         encoded = [enc.ids for enc in results]
@@ -163,10 +161,10 @@ class LLMTokenizer:
         return {i for i in (self.bos_id, self.eos_id, self.pad_id, self.im_start_id, self.im_end_id)
                 if i is not None}
 
-    def id_to_token(self, id: int) -> Optional[str]:
+    def id_to_token(self, id: int) -> str | None:
         return self.tokenizer.id_to_token(id)
 
-    def token_to_id(self, token: str) -> Optional[int]:
+    def token_to_id(self, token: str) -> int | None:
         return self.tokenizer.token_to_id(token)
 
 
@@ -187,8 +185,9 @@ def train_tokenizer_from_dataset(
         save_path: Where to save tokenizer files
         num_samples: Number of text samples to use for training
     """
-    from datasets import load_dataset
     from itertools import islice
+
+    from datasets import load_dataset
 
     print(f"Loading dataset {dataset_name}/{dataset_subset} (streaming)...")
     ds = load_dataset(dataset_name, dataset_subset, split="train", streaming=True)

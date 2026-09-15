@@ -15,12 +15,14 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
+from typing import Any
+
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import Dataset, DataLoader
-from typing import Optional, List, Iterator, Dict, Any, Tuple
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 
@@ -69,7 +71,7 @@ class TokenizedDataset(Dataset):
 # Multi-source text iterators
 # ──────────────────────────────────────────────
 
-def _iter_huggingface(source: Dict[str, Any]) -> Iterator[str]:
+def _iter_huggingface(source: dict[str, Any]) -> Iterator[str]:
     """Yield texts from a HuggingFace streaming dataset."""
     from datasets import load_dataset
 
@@ -89,7 +91,7 @@ def _iter_huggingface(source: Dict[str, Any]) -> Iterator[str]:
             yield text
 
 
-def _iter_text_dir(source: Dict[str, Any]) -> Iterator[str]:
+def _iter_text_dir(source: dict[str, Any]) -> Iterator[str]:
     """Yield texts from files in a directory (recursive).
 
     Reads all non-hidden files regardless of extension, so extension-less
@@ -112,16 +114,16 @@ def _iter_text_dir(source: Dict[str, Any]) -> Iterator[str]:
 
     for fpath in all_files:
         try:
-            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+            with open(fpath, encoding="utf-8", errors="replace") as f:
                 text = f.read().strip()
-        except (IOError, OSError) as e:
+        except OSError as e:
             print(f"  Warning: could not read {fpath}: {e}")
             continue
         if text and len(text) >= 50:
             yield text
 
 
-def _iter_jsonl(source: Dict[str, Any]) -> Iterator[str]:
+def _iter_jsonl(source: dict[str, Any]) -> Iterator[str]:
     """Yield texts from .jsonl files (single file or directory)."""
     path = source["path"]
     text_field = source.get("text_field", "text")
@@ -137,7 +139,7 @@ def _iter_jsonl(source: Dict[str, Any]) -> Iterator[str]:
     print(f"  Found {len(jsonl_files)} .jsonl files")
 
     for fpath in jsonl_files:
-        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+        with open(fpath, encoding="utf-8", errors="replace") as f:
             for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -159,7 +161,7 @@ _SOURCE_ITERATORS = {
 }
 
 
-def iter_texts_from_sources(sources: List[Dict[str, Any]]) -> Iterator[str]:
+def iter_texts_from_sources(sources: list[dict[str, Any]]) -> Iterator[str]:
     """
     Yield texts from a list of data source dicts (as defined in data.yaml).
     Sources are iterated sequentially in config order.
@@ -174,13 +176,13 @@ def iter_texts_from_sources(sources: List[Dict[str, Any]]) -> Iterator[str]:
         yield from iterator_fn(src)
 
 
-def load_data_config(config_path: str = "configs/data.yaml") -> Dict[str, Any]:
+def load_data_config(config_path: str = "configs/data.yaml") -> dict[str, Any]:
     """Load and return the data pipeline config."""
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
 
-def _val_every_from_processing(proc: Dict[str, Any], default: int) -> int:
+def _val_every_from_processing(proc: dict[str, Any], default: int) -> int:
     """Resolve the train/val split interval from a ``processing`` config block.
 
     Accepts ``val_every: N`` (every N-th document is validation) or the older
@@ -193,7 +195,7 @@ def _val_every_from_processing(proc: Dict[str, Any], default: int) -> int:
     return default
 
 
-def processing_params(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def processing_params(cfg: dict[str, Any]) -> dict[str, Any]:
     """Resolve the ``processing`` block of a data config into tokenizer kwargs.
 
     Returns ``{"output_dir", "max_tokens", "shard_size", "val_every"}`` with the
@@ -239,7 +241,7 @@ def _canonical_hash(obj: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _describe_files(base: str, paths: List[str]) -> List[Dict[str, Any]]:
+def _describe_files(base: str, paths: list[str]) -> list[dict[str, Any]]:
     """Content descriptors for *paths*, with names relative to *base* (posix separators)."""
     out = []
     for p in paths:
@@ -248,7 +250,7 @@ def _describe_files(base: str, paths: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
-def normalize_sources(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def normalize_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Reduce a list of source dicts to what actually determines the tokenized output.
 
@@ -303,11 +305,11 @@ def normalize_sources(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def compute_fingerprint(
     tokenizer_path: str,
-    sources: List[Dict[str, Any]],
+    sources: list[dict[str, Any]],
     shard_size: int,
     val_every: int,
-    max_tokens: Optional[int],
-) -> Tuple[str, Dict[str, Any]]:
+    max_tokens: int | None,
+) -> tuple[str, dict[str, Any]]:
     """
     Return ``(fingerprint, inputs)`` for a tokenization run.
 
@@ -327,26 +329,26 @@ def compute_fingerprint(
     return _canonical_hash(inputs), inputs
 
 
-def write_manifest(output_dir: str, manifest: Dict[str, Any]) -> str:
+def write_manifest(output_dir: str, manifest: dict[str, Any]) -> str:
     path = os.path.join(output_dir, MANIFEST_NAME)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     return path
 
 
-def read_manifest(data_dir: str) -> Optional[Dict[str, Any]]:
+def read_manifest(data_dir: str) -> dict[str, Any] | None:
     """Parsed ``manifest.json`` from *data_dir*, or None if missing/unreadable."""
     path = os.path.join(data_dir, MANIFEST_NAME)
     if not os.path.isfile(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
 
 
-def validate_local_cache(data_dir: str, fingerprint: str) -> Tuple[bool, str]:
+def validate_local_cache(data_dir: str, fingerprint: str) -> tuple[bool, str]:
     """Check that *data_dir* holds a complete cache for *fingerprint*.
 
     Returns ``(True, "ok")`` or ``(False, reason)``.
@@ -387,17 +389,17 @@ def _clear_shards(output_dir: str) -> int:
 def tokenize_and_save(
     tokenizer_path: str = "tokenizer_data",
     output_dir: str = "data",
-    max_tokens: Optional[int] = None,
+    max_tokens: int | None = None,
     shard_size: int = 100_000_000,
     val_every: int = 200,
-    sources: Optional[List[Dict[str, Any]]] = None,
-    config_path: Optional[str] = None,
+    sources: list[dict[str, Any]] | None = None,
+    config_path: str | None = None,
     # Legacy single-source args (used when sources is None)
     dataset_name: str = "HuggingFaceFW/fineweb-edu",
     dataset_subset: str = "sample-10BT",
     split: str = "train",
     write_manifest_file: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Tokenize text from one or more sources and save as packed binary shards.
 
@@ -464,7 +466,7 @@ def tokenize_and_save(
 
     val_buffer: list = []
     val_tokens = 0
-    files: List[Dict[str, Any]] = []   # manifest entries, in write order
+    files: list[dict[str, Any]] = []   # manifest entries, in write order
 
     def _flush_shard() -> None:
         nonlocal shard_idx, buf_pos
@@ -551,7 +553,7 @@ def tokenize_and_save(
 # ──────────────────────────────────────────────
 
 def _remote_cache_folder(fingerprint: str, root_folder_id: str, credentials_path: str,
-                         create: bool) -> Optional[str]:
+                         create: bool) -> str | None:
     """Drive handle for ``<root>/tokenized/<fp12>``, or None when absent and not creating."""
     from . import gdrive
     sub = gdrive.resolve_subfolder(root_folder_id, GDRIVE_CACHE_SUBDIR, credentials_path, create=create)
@@ -561,7 +563,7 @@ def _remote_cache_folder(fingerprint: str, root_folder_id: str, credentials_path
 
 
 def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_id: str,
-                                credentials_path: str) -> Dict[str, Any]:
+                                credentials_path: str) -> dict[str, Any]:
     """Fetch a cached tokenization from Drive into *output_dir*.
 
     Raises ``FileNotFoundError`` when Drive has no matching cache and
@@ -597,7 +599,7 @@ def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_i
     return remote
 
 
-def _upload_cache_to_gdrive(manifest: Dict[str, Any], output_dir: str, root_folder_id: str,
+def _upload_cache_to_gdrive(manifest: dict[str, Any], output_dir: str, root_folder_id: str,
                             credentials_path: str) -> None:
     """Upload shards then the manifest (last) to ``<root>/tokenized/<fp12>``."""
     from . import gdrive
@@ -612,8 +614,8 @@ def _upload_cache_to_gdrive(manifest: Dict[str, Any], output_dir: str, root_fold
 def ensure_tokenized_data(
     tokenizer_path: str,
     output_dir: str,
-    sources: List[Dict[str, Any]],
-    max_tokens: Optional[int] = None,
+    sources: list[dict[str, Any]],
+    max_tokens: int | None = None,
     shard_size: int = 100_000_000,
     val_every: int = 200,
     gdrive_folder_id: str = "",
@@ -676,7 +678,7 @@ def ensure_tokenized_data(
     return output_dir
 
 
-def find_train_shards(data_dir: str) -> List[str]:
+def find_train_shards(data_dir: str) -> list[str]:
     """Sorted list of ``train_NNNN.bin`` shard paths in ``data_dir``."""
     if not os.path.isdir(data_dir):
         return []
@@ -782,7 +784,7 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
 
     def __init__(
         self,
-        shard_files: List[str],
+        shard_files: list[str],
         seq_len: int,
         shuffle_shards: bool = True,
         shuffle_buffer_size: int = 1_000,
@@ -828,7 +830,7 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
 
     # ── internal helpers ─────────────────────────────────────────────
 
-    def _worker_layout(self) -> Tuple[int, int, List[Tuple[str, int]], int, int]:
+    def _worker_layout(self) -> tuple[int, int, list[tuple[str, int]], int, int]:
         """Decide which (shard, offset) pairs and which sample stride this worker handles."""
         worker_info = torch.utils.data.get_worker_info()
         worker_id = worker_info.id if worker_info is not None else 0
@@ -844,7 +846,7 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
             offsets = [int(rng.integers(self.seq_len)) for _ in shard_files]
         else:
             offsets = [0] * len(shard_files)
-        shards = list(zip(shard_files, offsets))
+        shards = list(zip(shard_files, offsets, strict=True))
 
         if len(shards) >= num_workers:
             # Worker-aware shard splitting: worker i reads shards i, i+W, i+2W, …
@@ -859,13 +861,13 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
         return worker_id, num_workers, my_shards, sample_start, sample_step
 
     def _index_stream(
-        self, worker_id: int, my_shards: List[Tuple[str, int]], sample_start: int, sample_step: int,
-    ) -> Iterator[Tuple[str, int]]:
+        self, worker_id: int, my_shards: list[tuple[str, int]], sample_start: int, sample_step: int,
+    ) -> Iterator[tuple[str, int]]:
         """Yield ``(shard_path, token_start)`` pairs in final (shuffled) order. No I/O."""
         # Per-worker shuffle-buffer RNG — different seed per worker per epoch
         # so workers don't produce the same random order.
         buf_rng = np.random.default_rng(self.seed + self._epoch * 10_000 + worker_id)
-        buf: List[Tuple[str, int]] = []
+        buf: list[tuple[str, int]] = []
         buf_size = self.shuffle_buffer_size
 
         for shard_path, offset in my_shards:
@@ -913,7 +915,7 @@ class IterableShardDataset(torch.utils.data.IterableDataset):
         if skip > 0:
             stream = itertools.islice(stream, skip, None)
 
-        mmaps: Dict[str, np.memmap] = {}
+        mmaps: dict[str, np.memmap] = {}
         seq_len = self.seq_len
         for shard_path, start in stream:
             data = mmaps.get(shard_path)

@@ -5,24 +5,34 @@ checkpointing, periodic evaluation, text generation, and model internals visuali
 Works seamlessly in Colab, vast.ai, and local environments.
 """
 
-import os
 import gc
-import time
 import math
-import torch
+import os
+import time
 from contextlib import nullcontext
 from dataclasses import asdict
-from typing import Optional
+
+import torch
 
 from .config import ModelConfig, TrainConfig, get_model_config, load_model_config, load_train_config
-from .model import TransformerLM
-from .tokenizer import LLMTokenizer
 from .data import create_dataloader
 from .evaluate import compute_val_metrics
+from .model import TransformerLM
+from .tokenizer import LLMTokenizer
 from .utils import (
-    detect_environment, get_device, get_dtype, should_compile, set_seed,
-    get_lr, save_checkpoint, load_checkpoint, has_checkpoint, unwrap_model,
-    make_grad_scaler, MetricsTracker, Timer,
+    MetricsTracker,
+    Timer,
+    detect_environment,
+    get_device,
+    get_dtype,
+    get_lr,
+    has_checkpoint,
+    load_checkpoint,
+    make_grad_scaler,
+    save_checkpoint,
+    set_seed,
+    should_compile,
+    unwrap_model,
 )
 from .visualize import generate_all_visualizations
 
@@ -31,7 +41,7 @@ def train(
     model_config: ModelConfig,
     train_config: TrainConfig,
     *,
-    stop_after_step: Optional[int] = None,
+    stop_after_step: int | None = None,
 ):
     """
     Full pre-training loop.
@@ -230,8 +240,8 @@ def train(
     model.train()
     running_loss = 0.0
     steps_in_window = 0
-    last_logged_loss: Optional[float] = None
-    last_val_loss: Optional[float] = None
+    last_logged_loss: float | None = None
+    last_val_loss: float | None = None
     improved_since_save = False   # did validation improve since the last checkpoint?
 
     def checkpoint(step: int):
@@ -302,7 +312,7 @@ def train(
                     raise RuntimeError(
                         f"OOM at step {step} even with minimum seq_len={seq_cap}. "
                         "Enable gradient_checkpointing or reduce batch_size."
-                    )
+                    ) from None
                 oom_retries += 1
                 seq_cap = new_cap
                 print(f"  ! OOM at step {step} -- retry {oom_retries} with seq_cap={seq_cap}")

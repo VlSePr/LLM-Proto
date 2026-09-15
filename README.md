@@ -13,7 +13,7 @@ A from-scratch LLaMA-style Transformer language model framework built with PyTor
 - **BPE Tokenizer** — 32K vocabulary with byte-level fallback (HuggingFace `tokenizers` backend)
 - **Google Drive Backup** — optional checkpoint sync (Colab mount or REST API)
 - **Weights & Biases** — experiment tracking, loss curves, sample generations, model visualizations
-- **5 Model Presets** — tiny (35M), small (100M), medium (300M), base (470M), large (1.5B)
+- **5 Model Presets** — tiny (35M), small (100M), medium (303M), base (466M), large (1.5B)
 - **Environment Support** — Google Colab, vast.ai, local GPU
 
 ## Quick Start
@@ -106,8 +106,7 @@ python -m src.evaluate --checkpoint smoke_run/checkpoints/latest.pt --data_dir s
 LLM-Proto/
 ├── configs/                 # YAML configuration files
 │   ├── data.yaml            # Data sources & tokenizer settings
-│   ├── training.yaml        # Training hyperparameters
-│   └── model_*.yaml         # Model architecture presets (tiny → large)
+│   └── training.yaml        # Training hyperparameters (model presets live in src/config.py)
 ├── src/                     # Core source code
 │   ├── model.py             # Transformer model (RMSNorm, RoPE, GQA, SwiGLU)
 │   ├── tokenizer.py         # BPE tokenizer training & inference
@@ -136,6 +135,8 @@ LLM-Proto/
 
 ## Model Presets
 
+Presets are defined in `MODEL_CONFIGS` in `src/config.py` and selected by name (`--model small`).
+For a custom architecture, pass a YAML path instead (`--model my_model.yaml`); it accepts any `ModelConfig` field.
 Parameter counts are exact for the default 32K vocabulary with tied embeddings.
 
 | Preset | Params | Dim | Layers | Heads (Q/KV) | Context | Recommended GPU |

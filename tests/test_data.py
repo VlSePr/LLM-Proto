@@ -5,9 +5,13 @@ import numpy as np
 import torch
 
 from src.data import (
-    IterableShardDataset, create_dataloader, find_train_shards, _val_every_from_processing, tokenize_and_save,
+    IterableShardDataset,
+    _val_every_from_processing,
+    create_dataloader,
+    find_train_shards,
+    tokenize_and_save,
 )
-from tests.conftest import write_shards, TINY_VOCAB
+from tests.conftest import TINY_VOCAB, write_shards
 
 SEQ = 16
 
@@ -71,7 +75,7 @@ def test_skip_batches_single_worker_resumes_exactly(tmp_data):
     assert ds._worker_skip_samples(wid, nw) == 12
     resumed = _samples(ds)
     assert len(resumed) == len(full) - 12
-    for (a, b), (c, d) in zip(resumed, full[12:]):
+    for (a, b), (c, d) in zip(resumed, full[12:], strict=True):
         assert torch.equal(a, c) and torch.equal(b, d)
 
 

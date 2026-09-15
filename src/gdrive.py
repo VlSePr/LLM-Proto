@@ -17,11 +17,10 @@ returns whatever the current mode uses as a folder handle (a nested path on
 Colab, a folder ID in API mode).
 """
 
-import os
-import sys
 import glob
+import os
 import shutil
-from typing import Optional
+import sys
 
 _COLAB_MOUNT = "/content/drive"
 
@@ -93,7 +92,7 @@ def reset_service():
     _drive_service = None
 
 
-def _find_file(service, name: str, folder_id: str) -> Optional[str]:
+def _find_file(service, name: str, folder_id: str) -> str | None:
     """Return file ID if *name* exists in *folder_id*, else None."""
     query = (
         f"'{folder_id}' in parents and name = '{name}' "
@@ -107,7 +106,7 @@ def _find_file(service, name: str, folder_id: str) -> Optional[str]:
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
-def _find_folder(service, name: str, parent_id: str) -> Optional[str]:
+def _find_folder(service, name: str, parent_id: str) -> str | None:
     """Return the ID of sub-folder *name* under *parent_id*, else None.
 
     Drive allows several folders with the same name; the oldest one is
@@ -135,7 +134,7 @@ def resolve_subfolder(
     name: str,
     credentials_path: str = "",
     create: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """
     Return a folder handle for sub-folder *name* inside *parent_folder_id*.
 

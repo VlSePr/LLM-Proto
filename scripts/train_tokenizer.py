@@ -17,8 +17,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import yaml
-from src.tokenizer import LLMTokenizer
+
 from src.data import iter_texts_from_sources
+from src.tokenizer import LLMTokenizer
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
     parser.add_argument("--force", action="store_true", help="Retrain even if tokenizer exists")
     args = parser.parse_args()
 
-    with open(args.config, "r") as f:
+    with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
     tok_cfg = cfg["tokenizer"]

@@ -1,7 +1,7 @@
 # LLM-Proto — Complete Codebase Documentation
 
 > A from-scratch LLaMA-style Transformer language model framework.  
-> Supports training models from **30M to 1B+ parameters** using modern techniques:  
+> Supports training models from **35M to 1.5B parameters** using modern techniques:  
 > RoPE, SwiGLU, Grouped Query Attention, Flash Attention, mixed precision, and KV-cache inference.
 
 ---
@@ -94,12 +94,7 @@ LLM-Proto is a **complete, self-contained framework** for pre-training decoder-o
 LLM-Proto/
 ├── configs/                    # All YAML configuration files
 │   ├── data.yaml               # Data sources, tokenizer settings, processing params
-│   ├── training.yaml           # Training hyperparameters (LR, batch size, etc.)
-│   ├── model_tiny.yaml         #  ~30M params  — prototyping
-│   ├── model_small.yaml        # ~125M params  — mid-range
-│   ├── model_medium.yaml       # ~350M params  — GPT-2 scale
-│   ├── model_base.yaml         # ~500M params  — production-ready
-│   └── model_large.yaml        #   ~1B params  — full scale
+│   └── training.yaml           # Training hyperparameters (LR, batch size, etc.)
 │
 ├── src/                        # Core Python source code
 │   ├── __init__.py             # Package marker (empty)
@@ -182,7 +177,6 @@ All training settings in one place, loadable from `configs/training.yaml`.
 @dataclass
 class TrainConfig:
     # --- Data ---
-    dataset_name: str = "HuggingFaceFW/fineweb-edu"  # Default dataset
     data_dir: str = "data"                            # Where binary shards live
     tokenizer_path: str = "tokenizer_data"
 
@@ -234,15 +228,16 @@ class TrainConfig:
 
 ### 3.3 Preset Model Configs
 
-Five pre-defined model sizes, selectable by name:
+Five pre-defined model sizes live in `MODEL_CONFIGS` (`src/config.py`) and are selected by name.
+They are the single source of truth; `tests/test_config.py` asserts these parameter counts.
 
-| Name | dim | Layers | Heads | KV Heads | Seq Len | ~Params |
-|------|-----|--------|-------|----------|---------|---------|
-| `tiny` | 512 | 6 | 8 | 4 | 2048 | **30M** |
-| `small` | 768 | 12 | 12 | 4 | 2048 | **125M** |
-| `medium` | 1024 | 24 | 16 | 4 | 2048 | **350M** |
-| `base` | 1280 | 24 | 20 | 4 | 2048 | **500M** |
-| `large` | 2048 | 32 | 32 | 8 | 4096 | **1B** |
+| Name | dim | Layers | Heads | KV Heads | Seq Len | Params |
+|------|-----|--------|-------|----------|---------|--------|
+| `tiny` | 512 | 6 | 8 | 4 | 2048 | **35M** |
+| `small` | 768 | 12 | 12 | 4 | 2048 | **100M** |
+| `medium` | 1024 | 24 | 16 | 4 | 2048 | **303M** |
+| `base` | 1280 | 24 | 20 | 4 | 2048 | **466M** |
+| `large` | 2048 | 32 | 32 | 8 | 4096 | **1.5B** |
 
 ### 3.4 Config I/O
 
@@ -691,7 +686,7 @@ Each `.pt` checkpoint file contains:
 
 ```bash
 python -m src.train --model tiny --config configs/training.yaml
-python -m src.train --model configs/model_large.yaml --resume latest --no_wandb
+python -m src.train --model large --resume latest --no_wandb
 python -m src.train --model small --batch_size 16 --peak_lr 3e-4
 ```
 
@@ -964,9 +959,11 @@ Sources can be mixed (`huggingface`, `text_dir`, `jsonl`); mixing weights are no
 
 All `TrainConfig` fields as YAML. CLI flags override these.
 
-### 13.3 `model_*.yaml` — Architecture Presets
+### 13.3 Custom architecture YAML
 
-One file per model size. Each contains the `ModelConfig` fields for that size.
+Presets are Python (`MODEL_CONFIGS`), not files. For a one-off architecture, write any subset of
+`ModelConfig` fields to a YAML file and pass its path: `--model my_model.yaml`. It is parsed by
+`load_model_config`, which rejects unknown keys.
 
 ---
 
@@ -1038,13 +1035,13 @@ Step 6: Generate text
 
 ## 16. Model Size Presets
 
-| Config | dim | Layers | Heads (Q/KV) | FFN dim | Seq Len | ~Parameters | GPU Memory (bf16) | Use Case |
-|--------|-----|--------|-------------|---------|---------|------------|-------------------|---------|
-| **tiny** | 512 | 6 | 8/4 | 1536 | 2048 | ~30M | ~256 MB | Debugging, prototyping |
-| **small** | 768 | 12 | 12/4 | 2048 | 2048 | ~125M | ~1 GB | Colab T4, learning |
-| **medium** | 1024 | 24 | 16/4 | 2816 | 2048 | ~350M | ~2.5 GB | GPT-2 scale experiments |
-| **base** | 1280 | 24 | 20/4 | 3584 | 2048 | ~500M | ~4 GB | Production-quality |
-| **large** | 2048 | 32 | 32/8 | 5632 | 4096 | ~1B | ~8 GB | Full scale, A100 recommended |
+| Config | dim | Layers | Heads (Q/KV) | FFN dim | Seq Len | Parameters | Weights (bf16) | Use Case |
+|--------|-----|--------|-------------|---------|---------|------------|----------------|---------|
+| **tiny** | 512 | 6 | 8/4 | 1536 | 2048 | 35M | ~70 MB | Debugging, prototyping |
+| **small** | 768 | 12 | 12/4 | 2048 | 2048 | 100M | ~200 MB | Colab T4, learning |
+| **medium** | 1024 | 24 | 16/4 | 2816 | 2048 | 303M | ~0.6 GB | GPT-2 scale experiments |
+| **base** | 1280 | 24 | 20/4 | 3584 | 2048 | 466M | ~0.9 GB | Production-quality |
+| **large** | 2048 | 32 | 32/8 | 5632 | 4096 | 1.5B | ~3 GB | Full scale, A100 recommended |
 
 ---
 

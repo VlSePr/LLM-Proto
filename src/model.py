@@ -5,11 +5,11 @@ Fully parameterized by ModelConfig — same code for 30M to 1B+.
 """
 
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as torch_checkpoint
-from typing import Optional, Tuple
 
 from .config import ModelConfig
 
@@ -40,7 +40,9 @@ class RMSNorm(nn.Module):
         return (x.float() * norm).type_as(x) * self.weight
 
 
-def precompute_rope_freqs(dim: int, max_seq_len: int, theta: float = 10_000.0, device: torch.device = None) -> torch.Tensor:
+def precompute_rope_freqs(
+    dim: int, max_seq_len: int, theta: float = 10_000.0, device: torch.device = None,
+) -> torch.Tensor:
     """
     Precompute complex RoPE frequencies: e^(i * m * theta_k) for all positions m and freq indices k.
 
@@ -111,9 +113,9 @@ class Attention(nn.Module):
         self,
         x: torch.Tensor,
         rope_freqs: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        mask: torch.Tensor | None = None,
+        kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         B, T, _ = x.shape
 
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
@@ -215,9 +217,9 @@ class TransformerBlock(nn.Module):
         self._use_gradient_checkpointing: bool = False
 
     def _run(self, x: torch.Tensor, rope_freqs: torch.Tensor,
-             mask: Optional[torch.Tensor],
-             kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]]
-             ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+             mask: torch.Tensor | None,
+             kv_cache: tuple[torch.Tensor, torch.Tensor] | None
+             ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         """Actual forward computation, separated so checkpointing can wrap it."""
         h, new_kv = self.attn(self.attn_norm(x), rope_freqs, mask, kv_cache)
         x = x + h
@@ -228,9 +230,9 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         rope_freqs: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        mask: torch.Tensor | None = None,
+        kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         # Gradient checkpointing: instead of storing all intermediate activations
         # for the backward pass, discard them during forward and recompute as needed.
         # Saves ~60% activation memory at cost of ~33% extra compute (one extra
@@ -333,8 +335,8 @@ class TransformerLM(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        targets: Optional[torch.Tensor] = None,
-        kv_cache: Optional[list] = None,
+        targets: torch.Tensor | None = None,
+        kv_cache: list | None = None,
         start_pos: int = 0,
     ) -> dict:
         """
@@ -386,9 +388,9 @@ class TransformerLM(nn.Module):
         temperature: float = 0.8,
         top_k: int = 50,
         top_p: float = 0.9,
-        eos_token_id: Optional[int] = None,
+        eos_token_id: int | None = None,
         repetition_penalty: float = 1.0,
-        pad_token_id: Optional[int] = None,
+        pad_token_id: int | None = None,
     ) -> torch.Tensor:
         """
         Autoregressive generation with KV-cache, temperature, top-k, top-p sampling,

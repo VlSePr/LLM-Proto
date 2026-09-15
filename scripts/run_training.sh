@@ -23,7 +23,7 @@ tmux has-session -t "$SESSION_NAME" 2>/dev/null && {
 
 tmux new-session -d -s "$SESSION_NAME" \
     "python -m src.train \
-        --model configs/model_${MODEL_SIZE}.yaml \
+        --model ${MODEL_SIZE} \
         --config configs/training.yaml \
         --wandb_run_name ${MODEL_SIZE}_$(date +%Y%m%d_%H%M%S) \
         $@ \

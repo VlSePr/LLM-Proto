@@ -1,7 +1,7 @@
-import torch
 import pytest
+import torch
 
-from src.model import TransformerLM, IGNORE_INDEX
+from src.model import IGNORE_INDEX, TransformerLM
 
 
 def test_forward_shapes_and_loss(tiny_cfg, seed):

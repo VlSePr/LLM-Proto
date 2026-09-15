@@ -7,8 +7,14 @@ import torch
 from src.config import TrainConfig
 from src.model import TransformerLM
 from src.utils import (
-    save_checkpoint, load_checkpoint, has_checkpoint, build_model_from_checkpoint,
-    strip_compile_prefix, unwrap_model, resolve_checkpoint_filename, cleanup_checkpoints,
+    build_model_from_checkpoint,
+    cleanup_checkpoints,
+    has_checkpoint,
+    load_checkpoint,
+    resolve_checkpoint_filename,
+    save_checkpoint,
+    strip_compile_prefix,
+    unwrap_model,
 )
 
 
@@ -38,7 +44,9 @@ def test_round_trip_through_compile_prefix(tiny_cfg, tmp_path, seed):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
     tcfg = _train_cfg(tmp_path)
 
-    random.seed(123); np.random.seed(123); torch.manual_seed(123)
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
     path = save_checkpoint(
         wrapped, opt, 7, 1.23, tiny_cfg, tcfg, tcfg.checkpoint_dir, is_best=True,
         best_val_loss=0.5, val_loss=0.6, scaler_state={"scale": 1.0}, epoch=2,
@@ -58,12 +66,14 @@ def test_round_trip_through_compile_prefix(tiny_cfg, tmp_path, seed):
     fresh = TransformerLM(tiny_cfg)
     ckpt = load_checkpoint(tcfg.checkpoint_dir, "latest", fresh, device=torch.device("cpu"))
     assert ckpt["step"] == 7
-    for (ka, va), (kb, vb) in zip(model.state_dict().items(), fresh.state_dict().items()):
+    for (ka, va), (kb, vb) in zip(model.state_dict().items(), fresh.state_dict().items(), strict=True):
         assert ka == kb and torch.equal(va, vb)
 
     # RNG states were restored: the next draws match the ones right after saving
     expected = (random.random(), float(np.random.rand()), torch.rand(1).item())
-    random.seed(123); np.random.seed(123); torch.manual_seed(123)
+    random.seed(123)
+    np.random.seed(123)
+    torch.manual_seed(123)
     # (save_checkpoint captured the state *after* seeding; re-seed and re-capture to compare)
     load_checkpoint(tcfg.checkpoint_dir, "latest", fresh, device=torch.device("cpu"))
     assert (random.random(), float(np.random.rand()), torch.rand(1).item()) == expected

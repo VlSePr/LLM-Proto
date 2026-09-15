@@ -3,13 +3,13 @@ Evaluation: validation loss and perplexity.
 """
 
 import math
-import torch
 from contextlib import nullcontext
-from typing import Optional
 
-from .model import IGNORE_INDEX
+import torch
+
 from .data import create_dataloader
-from .utils import get_device, get_dtype, build_model_from_checkpoint
+from .model import IGNORE_INDEX
+from .utils import build_model_from_checkpoint, get_device, get_dtype
 
 
 @torch.no_grad()
@@ -69,7 +69,7 @@ def compute_val_metrics(
 
 def evaluate_checkpoint(
     checkpoint_path: str,
-    model_config_name: Optional[str] = None,
+    model_config_name: str | None = None,
     data_dir: str = "data",
     batch_size: int = 32,
     max_batches: int = 200,

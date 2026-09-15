@@ -4,10 +4,12 @@ Generates matplotlib figures logged to Wandb.
 """
 
 import sys
+
+import matplotlib
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
-import matplotlib
+
 # Use the non-interactive "Agg" backend on headless servers (vast.ai, remote SSH)
 # so matplotlib renders to in-memory buffers instead of trying to open a window.
 # In notebooks/Colab the interactive backend is auto-detected via IPython modules.
@@ -271,7 +273,6 @@ def plot_token_loss_heatmap(
     model.eval()
     device = next(model.parameters()).device
     input_ids = input_ids[:1, :max_len].to(device)
-    T = input_ids.shape[1]
 
     with torch.no_grad():
         out = model(input_ids[:, :-1], targets=None)
