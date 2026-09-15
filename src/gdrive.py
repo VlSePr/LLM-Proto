@@ -238,7 +238,6 @@ def download_from_gdrive(
         return dest
 
     # ── API mode ──
-    import io
     from googleapiclient.http import MediaIoBaseDownload
 
     service = _get_service(credentials_path)

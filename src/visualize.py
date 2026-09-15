@@ -18,7 +18,6 @@ if not any(k in sys.modules for k in ("IPython", "ipykernel", "google.colab")):
         pass
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Optional, List
 
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer

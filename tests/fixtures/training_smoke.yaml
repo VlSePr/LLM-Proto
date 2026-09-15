@@ -1,0 +1,21 @@
+# Training config for the CPU smoke test (see README "Smoke test")
+data_dir: smoke_run/data
+tokenizer_path: smoke_run/tokenizer
+checkpoint_dir: smoke_run/checkpoints
+batch_size: 2
+gradient_accumulation_steps: 1
+max_steps: 20
+warmup_steps: 2
+peak_lr: 1e-3
+min_lr: 1e-4
+precision: fp32
+use_compile: "false"
+num_workers: 0
+log_every_steps: 5
+eval_every_steps: 10
+eval_max_batches: 2
+save_every_steps: 10
+generate_every_steps: 10
+visualize_every_steps: 10000
+use_wandb: false
+backup_to_gdrive: false

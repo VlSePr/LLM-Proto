@@ -68,7 +68,7 @@ def main():
     test_text = "The quick brown fox jumps over the lazy dog."
     ids = tokenizer.encode(test_text)
     decoded = tokenizer.decode(ids)
-    print(f"Test: '{test_text}' → {len(ids)} tokens → '{decoded}'")
+    print(f"Test: '{test_text}' -> {len(ids)} tokens -> '{decoded}'")
 
 
 if __name__ == "__main__":

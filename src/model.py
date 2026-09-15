@@ -13,6 +13,9 @@ from typing import Optional, Tuple
 
 from .config import ModelConfig
 
+# Target value that is excluded from the loss (PyTorch / HuggingFace convention).
+IGNORE_INDEX = -100
+
 
 class RMSNorm(nn.Module):
     """
@@ -298,7 +301,7 @@ class TransformerLM(nn.Module):
         """Disable activation checkpointing (restore full-speed forward pass)."""
         for layer in self.layers:
             layer._use_gradient_checkpointing = False
-        print(f"Gradient checkpointing DISABLED")
+        print("Gradient checkpointing DISABLED")
 
     def _init_weights(self):
         """
@@ -345,6 +348,10 @@ class TransformerLM(nn.Module):
             dict with 'logits', optionally 'loss', and 'kv_cache'
         """
         B, T = input_ids.shape
+        if start_pos + T > self.config.max_seq_len:
+            raise ValueError(
+                f"Sequence positions {start_pos}..{start_pos + T} exceed max_seq_len={self.config.max_seq_len}"
+            )
         x = self.tok_emb(input_ids)
 
         # Slice RoPE frequencies for current positions
@@ -365,7 +372,7 @@ class TransformerLM(nn.Module):
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 targets.view(-1),
-                ignore_index=-1,
+                ignore_index=IGNORE_INDEX,
             )
             result["loss"] = loss
 
@@ -380,65 +387,104 @@ class TransformerLM(nn.Module):
         top_k: int = 50,
         top_p: float = 0.9,
         eos_token_id: Optional[int] = None,
+        repetition_penalty: float = 1.0,
+        pad_token_id: Optional[int] = None,
     ) -> torch.Tensor:
         """
-        Autoregressive generation with KV-cache, temperature, top-k, and top-p sampling.
+        Autoregressive generation with KV-cache, temperature, top-k, top-p sampling,
+        and an optional repetition penalty.
+
+        - Generation never exceeds ``config.max_seq_len`` total tokens: ``max_new_tokens``
+          is clamped to the remaining context. A prompt that already fills the context
+          is returned unchanged.
+        - With ``eos_token_id`` set, each row stops independently; finished rows are
+          padded with ``pad_token_id`` (defaults to ``eos_token_id``) until every row
+          has finished or the budget is exhausted.
+        - ``repetition_penalty`` > 1.0 penalizes tokens already present in the sequence
+          (HuggingFace convention: positive logits are divided, negative multiplied).
         """
+        was_training = self.training
         self.eval()
-        B, T = input_ids.shape
-        kv_cache = None
-        generated = input_ids
+        try:
+            B, T = input_ids.shape
+            max_new_tokens = min(max_new_tokens, self.config.max_seq_len - T)
+            if max_new_tokens <= 0:
+                return input_ids
 
-        for i in range(max_new_tokens):
-            if kv_cache is None:
-                # First pass: process full prompt
-                out = self.forward(generated, kv_cache=None, start_pos=0)
+            if pad_token_id is None:
+                pad_token_id = eos_token_id
+
+            kv_cache = None
+            generated = input_ids
+            finished = torch.zeros(B, dtype=torch.bool, device=input_ids.device)
+
+            for _ in range(max_new_tokens):
+                if kv_cache is None:
+                    # First pass: process full prompt
+                    out = self.forward(generated, kv_cache=None, start_pos=0)
+                else:
+                    # Subsequent passes: process only the last token
+                    out = self.forward(generated[:, -1:], kv_cache=kv_cache, start_pos=generated.shape[1] - 1)
                 kv_cache = out["kv_cache"]
-            else:
-                # Subsequent passes: process only the last token
-                out = self.forward(generated[:, -1:], kv_cache=kv_cache, start_pos=generated.shape[1] - 1)
-                kv_cache = out["kv_cache"]
 
-            logits = out["logits"][:, -1, :]  # (B, vocab_size)
+                logits = out["logits"][:, -1, :].float()  # (B, vocab_size)
 
-            # Temperature controls randomness: <1 = more deterministic, >1 = more creative.
-            # It scales logits before softmax: lower temp → sharper distribution → less surprise.
-            if temperature > 0:
-                logits = logits / temperature
+                if repetition_penalty != 1.0:
+                    # Penalize every token that already appears in the sequence.
+                    prev_scores = torch.gather(logits, 1, generated)
+                    prev_scores = torch.where(
+                        prev_scores < 0, prev_scores * repetition_penalty, prev_scores / repetition_penalty
+                    )
+                    logits = logits.scatter(1, generated, prev_scores)
 
-                # Top-k: keep only the k most likely tokens, zero out the rest.
-                # Prevents sampling from the long tail of unlikely tokens.
-                if top_k > 0:
-                    top_k_vals, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < top_k_vals[:, -1:]] = float("-inf")
+                # Temperature controls randomness: <1 = more deterministic, >1 = more creative.
+                # It scales logits before softmax: lower temp → sharper distribution → less surprise.
+                if temperature > 0:
+                    logits = logits / temperature
 
-                # Top-p (nucleus) filtering: keep the smallest set of tokens whose
-                # cumulative probability ≥ top_p. Adapts dynamically — when the model
-                # is confident, fewer tokens are kept; when uncertain, more are allowed.
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
-                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                    # Remove tokens with cumulative probability above top_p
-                    remove_mask = cumulative_probs > top_p
-                    # Shift right so that first token above threshold is kept
-                    remove_mask[:, 1:] = remove_mask[:, :-1].clone()
-                    remove_mask[:, 0] = False
-                    sorted_logits[remove_mask] = float("-inf")
-                    # Scatter back
-                    logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
+                    # Top-k: keep only the k most likely tokens, zero out the rest.
+                    # Prevents sampling from the long tail of unlikely tokens.
+                    if top_k > 0:
+                        top_k_vals, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                        logits[logits < top_k_vals[:, -1:]] = float("-inf")
 
-                probs = F.softmax(logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-            else:
-                # Greedy
-                next_token = logits.argmax(dim=-1, keepdim=True)
+                    # Top-p (nucleus) filtering: keep the smallest set of tokens whose
+                    # cumulative probability ≥ top_p. Adapts dynamically — when the model
+                    # is confident, fewer tokens are kept; when uncertain, more are allowed.
+                    if top_p < 1.0:
+                        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                        # Remove tokens with cumulative probability above top_p
+                        remove_mask = cumulative_probs > top_p
+                        # Shift right so that first token above threshold is kept
+                        remove_mask[:, 1:] = remove_mask[:, :-1].clone()
+                        remove_mask[:, 0] = False
+                        sorted_logits[remove_mask] = float("-inf")
+                        # Scatter back into vocabulary order
+                        logits = torch.full_like(logits, float("-inf")).scatter(1, sorted_indices, sorted_logits)
 
-            generated = torch.cat([generated, next_token], dim=1)
+                    probs = F.softmax(logits, dim=-1)
+                    next_token = torch.multinomial(probs, num_samples=1)
+                else:
+                    # Greedy
+                    next_token = logits.argmax(dim=-1, keepdim=True)
 
-            if eos_token_id is not None and (next_token == eos_token_id).all():
-                break
+                if eos_token_id is not None:
+                    # Rows that already finished keep emitting the pad token.
+                    next_token = torch.where(
+                        finished.unsqueeze(1), torch.full_like(next_token, pad_token_id), next_token
+                    )
+                    finished |= next_token.squeeze(1) == eos_token_id
 
-        return generated
+                generated = torch.cat([generated, next_token], dim=1)
+
+                if eos_token_id is not None and bool(finished.all()):
+                    break
+
+            return generated
+        finally:
+            if was_training:
+                self.train()
 
     def count_parameters(self, trainable_only: bool = True) -> int:
         """Count model parameters."""
@@ -451,7 +497,7 @@ class TransformerLM(nn.Module):
         total = self.count_parameters(trainable_only=False)
         trainable = self.count_parameters(trainable_only=True)
         lines = [
-            f"TransformerLM Summary",
+            "TransformerLM Summary",
             f"  Layers: {self.config.n_layers}",
             f"  Hidden dim: {self.config.dim}",
             f"  Attention heads: {self.config.n_heads} (KV heads: {self.config.n_kv_heads})",
