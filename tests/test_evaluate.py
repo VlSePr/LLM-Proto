@@ -2,13 +2,14 @@ import torch
 import torch.nn.functional as F
 
 from src.evaluate import compute_val_metrics
-from src.model import TransformerLM, IGNORE_INDEX
+from src.model import IGNORE_INDEX, TransformerLM
 
 
 def test_val_loss_is_token_weighted(tiny_cfg, seed):
     model = TransformerLM(tiny_cfg).eval()
     b1 = torch.randint(0, tiny_cfg.vocab_size, (2, 8))
-    t1 = b1.clone(); t1[0, 5:] = IGNORE_INDEX          # batch 1: 13 valid tokens
+    t1 = b1.clone()
+    t1[0, 5:] = IGNORE_INDEX          # batch 1: 13 valid tokens
     b2 = torch.randint(0, tiny_cfg.vocab_size, (1, 8))
     t2 = b2.clone()                                      # batch 2: 8 valid tokens
     loader = [(b1, t1), (b2, t2)]

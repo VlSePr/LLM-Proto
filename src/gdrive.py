@@ -17,11 +17,10 @@ returns whatever the current mode uses as a folder handle (a nested path on
 Colab, a folder ID in API mode).
 """
 
-import os
-import sys
 import glob
+import os
 import shutil
-from typing import Optional
+import sys
 
 _COLAB_MOUNT = "/content/drive"
 
@@ -93,7 +92,7 @@ def reset_service():
     _drive_service = None
 
 
-def _find_file(service, name: str, folder_id: str) -> Optional[str]:
+def _find_file(service, name: str, folder_id: str) -> str | None:
     """Return file ID if *name* exists in *folder_id*, else None."""
     query = (
         f"'{folder_id}' in parents and name = '{name}' "
@@ -107,7 +106,7 @@ def _find_file(service, name: str, folder_id: str) -> Optional[str]:
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
-def _find_folder(service, name: str, parent_id: str) -> Optional[str]:
+def _find_folder(service, name: str, parent_id: str) -> str | None:
     """Return the ID of sub-folder *name* under *parent_id*, else None.
 
     Drive allows several folders with the same name; the oldest one is
@@ -135,7 +134,7 @@ def resolve_subfolder(
     name: str,
     credentials_path: str = "",
     create: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """
     Return a folder handle for sub-folder *name* inside *parent_folder_id*.
 
@@ -347,3 +346,68 @@ def download_from_gdrive(
 
     return local_path
 
+
+# ──────────────────────────────────────────────
+# Notebook helper
+# ──────────────────────────────────────────────
+
+def describe_drive_setup(
+    folder_id: str,
+    credentials_path: str = "",
+    *,
+    data_dir: str = "",
+    extra_folders: tuple = (),
+) -> dict:
+    """Mount (on Colab) and print what the Drive integration will use; returns the summary.
+
+    Reports the checkpoint folder(s) with their ``.pt`` counts, the optional training
+    data folder with its ``.txt`` / ``.jsonl`` counts (Colab only), and in API mode the
+    credential status. Never raises: problems are recorded under ``"errors"``.
+    """
+    info: dict = {"mode": "colab" if _is_colab() else "api", "folders": {}, "errors": []}
+    folders = [f for f in (folder_id, *extra_folders) if f]
+
+    if _is_colab():
+        try:
+            _ensure_colab_mount()
+            info["mount"] = _COLAB_MOUNT
+            print(f"Google Drive mounted at {_COLAB_MOUNT}")
+        except Exception as e:
+            info["errors"].append(f"mount failed: {e}")
+            print(f"! Google Drive mount failed: {e}")
+            return info
+        for name in folders:
+            path = _colab_folder(name)
+            n_pt = len([f for f in os.listdir(path) if f.endswith(".pt")])
+            info["folders"][name] = {"path": path, "pt_files": n_pt}
+            print(f"Checkpoint folder: {path} ({n_pt} .pt files)")
+        if data_dir:
+            path = _colab_folder(data_dir, create=False)
+            if os.path.isdir(path):
+                names = os.listdir(path)
+                counts = {ext: len([f for f in names if f.endswith(ext)]) for ext in (".txt", ".jsonl")}
+                info["data_dir"] = {"path": path, **counts}
+                print(f"Training data folder: {path} ({counts['.txt']} .txt, {counts['.jsonl']} .jsonl)")
+            else:
+                info["errors"].append(f"data_dir not found: {path}")
+                print(f"! Training data folder not found: {path}")
+        return info
+
+    if credentials_path and os.path.isfile(credentials_path):
+        info["credentials"] = credentials_path
+        print(f"Google Drive API credentials: {credentials_path}")
+    elif credentials_path:
+        info["errors"].append(f"credentials file not found: {credentials_path}")
+        print(f"! Credentials file not found: {credentials_path}")
+    else:
+        info["credentials"] = "application-default"
+        print("Google Drive API mode (Application Default Credentials)")
+    for name in folders:
+        try:
+            files = list_remote_checkpoints(name, credentials_path)
+            info["folders"][name] = {"pt_files": len(files)}
+            print(f"Checkpoint folder {name}: {len(files)} .pt files")
+        except Exception as e:
+            info["errors"].append(f"{name}: {e}")
+            print(f"! Could not list Drive folder {name}: {e}")
+    return info

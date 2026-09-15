@@ -1,9 +1,17 @@
+import pytest
 import torch
 
-from src.generate import clean_generated_text, generate_text, generate_ids, load_model_for_inference
+from src.config import TrainConfig
+from src.generate import (
+    ChatSession,
+    chat_widget,
+    clean_generated_text,
+    generate_ids,
+    generate_text,
+    load_model_for_inference,
+)
 from src.model import TransformerLM
 from src.utils import save_checkpoint
-from src.config import TrainConfig
 
 
 def test_clean_generated_text_only_strips_special_markup():
@@ -40,3 +48,34 @@ def test_load_model_for_inference_reads_config_from_checkpoint(tiny_cfg, tokeniz
     # legacy argument order still works
     loaded2, _ = load_model_for_inference("tiny", path, device=torch.device("cpu"))
     assert loaded2.config == tiny_cfg
+
+
+def test_chat_session_keeps_bounded_history(tiny_cfg, tokenizer, seed):
+    model = TransformerLM(tiny_cfg).eval()
+    session = ChatSession(model, tokenizer, max_new_tokens=8, temperature=0.0)
+    assert session.max_history == tiny_cfg.max_seq_len - 8 - 1
+    first = session.reply("hello there")
+    assert isinstance(first, str) and "<|" not in first
+    assert session.turns == [("hello there", first)]
+    n1 = len(session.history)
+    assert 0 < n1 <= session.max_history
+    for _ in range(6):
+        session.reply("and then what happened next in the story")
+    assert len(session.history) <= session.max_history
+    assert len(session.turns) == 7
+    session.clear()
+    assert session.history == [] and session.turns == []
+
+
+def test_chat_widget_drives_session(tiny_cfg, tokenizer, seed):
+    pytest.importorskip("ipywidgets")
+    model = TransformerLM(tiny_cfg).eval()
+    session = ChatSession(model, tokenizer, max_new_tokens=8, temperature=0.0)
+    ui = chat_widget(session)
+    textarea, buttons = ui.children[1], ui.children[2]
+    send_btn, clear_btn = buttons.children
+    textarea.value = "hello"
+    send_btn.click()
+    assert len(session.turns) == 1 and textarea.value == ""
+    clear_btn.click()
+    assert session.turns == [] and session.history == []

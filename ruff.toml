@@ -1,0 +1,8 @@
+# Lint configuration. Kept deliberately small: pyflakes/pycodestyle (E, F, W), import order (I),
+# pyupgrade (UP) and bugbear (B). `ruff check src tests scripts` must report zero findings.
+line-length = 120
+target-version = "py310"
+extend-exclude = ["*.ipynb", "smoke_run", "tokenizer_data"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
