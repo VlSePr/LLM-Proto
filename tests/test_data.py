@@ -8,7 +8,10 @@ from src.data import (
     IterableShardDataset,
     _val_every_from_processing,
     create_dataloader,
+    ensure_tokenized_data_from_config,
     find_train_shards,
+    read_manifest,
+    resolve_sources,
     tokenize_and_save,
 )
 from tests.conftest import TINY_VOCAB, write_shards
@@ -164,3 +167,43 @@ def test_tokenize_and_save_from_text_dir(tmp_path, tmp_tokenizer_dir):
     from src.tokenizer import LLMTokenizer
     tok = LLMTokenizer(tmp_tokenizer_dir)
     assert int((tokens == tok.bos_id).sum()) == 4
+
+
+def test_resolve_sources_filters_and_absolutises():
+    cfg = {"sources": [
+        {"type": "huggingface", "name": "x/y"},
+        {"type": "text_dir", "path": "data/custom/txt"},
+        {"type": "jsonl", "path": "/abs/file.jsonl"},
+    ]}
+    all_src = resolve_sources(cfg)
+    assert [s["type"] for s in all_src] == ["huggingface", "text_dir", "jsonl"]
+    local = resolve_sources(cfg, include_huggingface=False, base_dir="/repo")
+    assert [s["type"] for s in local] == ["text_dir", "jsonl"]
+    assert local[0]["path"] == os.path.join("/repo", "data/custom/txt")
+    assert local[1]["path"] == "/abs/file.jsonl"          # absolute paths untouched
+    assert cfg["sources"][1]["path"] == "data/custom/txt"  # input not mutated
+
+
+def test_ensure_tokenized_data_from_config(tmp_path, tmp_tokenizer_dir):
+    corpus = os.path.join(os.path.dirname(__file__), "fixtures", "corpus")
+    cfg_path = tmp_path / "data.yaml"
+    cfg_path.write_text(
+        "tokenizer:\n  save_path: unused\n"
+        "processing:\n  output_dir: shards\n  shard_size: 2048\n  val_every: 3\n"
+        "sources:\n  - type: huggingface\n    name: x/y\n"
+        f"  - type: text_dir\n    path: {corpus}\n"
+    )
+    out = ensure_tokenized_data_from_config(
+        str(cfg_path), tmp_tokenizer_dir, include_huggingface=False, gdrive_folder_id="",
+        base_dir=str(tmp_path),
+    )
+    assert out == os.path.join(str(tmp_path), "shards")
+    manifest = read_manifest(out)
+    assert manifest and manifest["n_train_shards"] >= 1
+    assert os.path.exists(os.path.join(out, "val.bin"))
+    # second call is a cache hit: manifest fingerprint unchanged
+    out2 = ensure_tokenized_data_from_config(
+        str(cfg_path), tmp_tokenizer_dir, include_huggingface=False, gdrive_folder_id="",
+        base_dir=str(tmp_path),
+    )
+    assert read_manifest(out2)["fingerprint"] == manifest["fingerprint"]

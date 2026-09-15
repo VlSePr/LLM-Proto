@@ -8,6 +8,7 @@ Data sources are configured via configs/data.yaml.
 Run ``python -m src.data --config configs/data.yaml`` to build the shards.
 """
 
+import copy
 import glob
 import hashlib
 import itertools
@@ -180,6 +181,30 @@ def load_data_config(config_path: str = "configs/data.yaml") -> dict[str, Any]:
     """Load and return the data pipeline config."""
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+def resolve_sources(
+    cfg: dict[str, Any],
+    *,
+    include_huggingface: bool = True,
+    base_dir: str | None = None,
+) -> list[dict[str, Any]]:
+    """The ``sources`` list of a data config, optionally without HuggingFace entries.
+
+    With ``base_dir`` every relative ``text_dir`` / ``jsonl`` path is made absolute
+    against it, so a notebook that changes directory (Colab clones the repo into
+    ``/content/LLM-Proto``) still points at the right files. The cache fingerprint
+    uses paths relative to each source root, so this never changes the cache key.
+    """
+    sources = copy.deepcopy(cfg.get("sources", []) or [])
+    if not include_huggingface:
+        sources = [s for s in sources if s.get("type", "huggingface") != "huggingface"]
+    if base_dir:
+        for src in sources:
+            path = src.get("path", "")
+            if src.get("type") in ("text_dir", "jsonl") and path and not os.path.isabs(path):
+                src["path"] = os.path.join(base_dir, path)
+    return sources
 
 
 def _val_every_from_processing(proc: dict[str, Any], default: int) -> int:
@@ -678,6 +703,49 @@ def ensure_tokenized_data(
     return output_dir
 
 
+def ensure_tokenized_data_from_config(
+    cfg_or_path: str | dict[str, Any] = "configs/data.yaml",
+    tokenizer_path: str | None = None,
+    *,
+    include_huggingface: bool = True,
+    max_tokens: int | None = None,
+    gdrive_folder_id: str | None = None,
+    gdrive_credentials_path: str | None = None,
+    force: bool = False,
+    base_dir: str | None = None,
+) -> str:
+    """``ensure_tokenized_data`` driven by a ``data.yaml`` (path or loaded dict).
+
+    ``tokenizer_path`` defaults to ``tokenizer.save_path`` from the config; ``max_tokens``
+    overrides ``processing.max_tokens``; ``gdrive_folder_id`` / ``gdrive_credentials_path``
+    override the ``cache`` block (pass ``""`` to disable Drive). ``base_dir`` absolutises
+    relative source paths and the output dir (see ``resolve_sources``). Returns the
+    shard directory. This is what ``python -m src.data`` and the notebooks call.
+    """
+    cfg = load_data_config(cfg_or_path) if isinstance(cfg_or_path, str) else cfg_or_path
+    tokenizer_path = tokenizer_path or (cfg.get("tokenizer", {}) or {}).get("save_path", "tokenizer_data")
+    proc = processing_params(cfg)
+    cache = cfg.get("cache", {}) or {}
+    folder_id = cache.get("gdrive_folder_id", "") if gdrive_folder_id is None else gdrive_folder_id
+    credentials = (cache.get("gdrive_credentials_path", "") if gdrive_credentials_path is None
+                   else gdrive_credentials_path)
+    output_dir = proc["output_dir"]
+    if base_dir and not os.path.isabs(output_dir):
+        output_dir = os.path.join(base_dir, output_dir)
+
+    return ensure_tokenized_data(
+        tokenizer_path=tokenizer_path,
+        output_dir=output_dir,
+        sources=resolve_sources(cfg, include_huggingface=include_huggingface, base_dir=base_dir),
+        max_tokens=max_tokens if max_tokens is not None else proc["max_tokens"],
+        shard_size=proc["shard_size"],
+        val_every=proc["val_every"],
+        gdrive_folder_id=folder_id or "",
+        gdrive_credentials_path=credentials or "",
+        force=force,
+    )
+
+
 def find_train_shards(data_dir: str) -> list[str]:
     """Sorted list of ``train_NNNN.bin`` shard paths in ``data_dir``."""
     if not os.path.isdir(data_dir):
@@ -1029,25 +1097,12 @@ def main():
     parser.add_argument("--force", action="store_true", help="Re-tokenize even if a valid cache exists")
     args = parser.parse_args()
 
-    cfg = load_data_config(args.config)
-    tokenizer_path = args.tokenizer_path or (cfg.get("tokenizer", {}) or {}).get("save_path", "tokenizer_data")
-    proc = processing_params(cfg)
-    cache = cfg.get("cache", {}) or {}
-    folder_id = "" if args.no_gdrive else (
-        args.gdrive_folder_id if args.gdrive_folder_id is not None else cache.get("gdrive_folder_id", "")
-    )
-    credentials = (args.gdrive_credentials if args.gdrive_credentials is not None
-                   else cache.get("gdrive_credentials_path", ""))
-
-    ensure_tokenized_data(
-        tokenizer_path=tokenizer_path,
-        output_dir=proc["output_dir"],
-        sources=cfg.get("sources", []),
-        max_tokens=args.max_tokens or proc["max_tokens"],
-        shard_size=proc["shard_size"],
-        val_every=proc["val_every"],
-        gdrive_folder_id=folder_id or "",
-        gdrive_credentials_path=credentials or "",
+    ensure_tokenized_data_from_config(
+        args.config,
+        args.tokenizer_path,
+        max_tokens=args.max_tokens,
+        gdrive_folder_id="" if args.no_gdrive else args.gdrive_folder_id,
+        gdrive_credentials_path=args.gdrive_credentials,
         force=args.force,
     )
 

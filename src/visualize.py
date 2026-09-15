@@ -367,6 +367,46 @@ def generate_all_visualizations(
         print(f"Warning: Visualization failed at step {step}: {e}")
 
 
+def plot_training_curves(history: list, keys: tuple = ("train/loss", "val/loss", "train/aux_loss")) -> plt.Figure:
+    """Loss curves from the metric history returned by ``train()`` (one panel per present key)."""
+    present = [k for k in keys if any(k in h for h in history)]
+    if not present:
+        return _empty_figure("no metrics logged yet")
+    fig, axes = plt.subplots(1, len(present), figsize=(5 * len(present), 4), squeeze=False)
+    for ax, key in zip(axes[0], present, strict=True):
+        pts = [(h["step"], h[key]) for h in history if key in h]
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], marker="." if len(pts) < 50 else None)
+        ax.set_title(key)
+        ax.set_xlabel("step")
+        ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
+def plot_expert_load(load_counts: dict) -> plt.Figure:
+    """Fraction of token-slots routed to each expert, one panel per MoE layer.
+
+    ``load_counts`` is ``moe.measure_expert_load``'s output; the dashed line marks a
+    perfectly uniform load.
+    """
+    if not load_counts:
+        return _empty_figure("no MoE layers")
+    layers = sorted(load_counts)
+    fig, axes = plt.subplots(1, len(layers), figsize=(4 * len(layers), 4), squeeze=False)
+    for ax, layer_idx in zip(axes[0], layers, strict=True):
+        counts = torch.as_tensor(load_counts[layer_idx], dtype=torch.float32)
+        fracs = (counts / counts.sum().clamp(min=1)).numpy()
+        ax.bar(range(len(fracs)), fracs, color="steelblue")
+        ax.axhline(1 / len(fracs), color="red", linestyle="--", label="uniform")
+        ax.set_title(f"Layer {layer_idx} expert load")
+        ax.set_xlabel("expert")
+        ax.set_ylabel("fraction of tokens")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
 def _empty_figure(message: str) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12)

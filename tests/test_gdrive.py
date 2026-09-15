@@ -87,3 +87,17 @@ def test_find_folder_query_filters_folder_mimetype(api_mode, monkeypatch):
     assert "mimeType = 'application/vnd.google-apps.folder'" in q["q"]
     assert "trashed = false" in q["q"]
     assert q["orderBy"] == "createdTime"
+
+
+def test_describe_drive_setup_api_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr(gdrive, "list_remote_checkpoints", lambda folder, creds="": [{"name": "latest.pt"}])
+    info = gdrive.describe_drive_setup("FOLDER", "", extra_folders=("FOLDER/expert",))
+    assert info["mode"] == "api" and info["credentials"] == "application-default"
+    assert info["folders"] == {"FOLDER": {"pt_files": 1}, "FOLDER/expert": {"pt_files": 1}}
+    assert info["errors"] == []
+
+    def boom(folder, creds=""):
+        raise RuntimeError("no network")
+    monkeypatch.setattr(gdrive, "list_remote_checkpoints", boom)
+    info = gdrive.describe_drive_setup("FOLDER", str(tmp_path / "missing.json"))
+    assert info["folders"] == {} and len(info["errors"]) == 2

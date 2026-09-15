@@ -168,51 +168,108 @@ class LLMTokenizer:
         return self.tokenizer.token_to_id(token)
 
 
+def train_tokenizer_from_sources(
+    sources: list,
+    vocab_size: int = 32_000,
+    save_path: str = "tokenizer_data",
+    num_samples: int = 50_000,
+    min_chars: int = 50,
+) -> LLMTokenizer:
+    """Train a BPE tokenizer on up to ``num_samples`` documents from ``data.yaml``-style sources.
+
+    ``sources`` is the list of source dicts (``huggingface`` / ``text_dir`` / ``jsonl``)
+    consumed by ``data.iter_texts_from_sources``; documents shorter than ``min_chars`` are
+    skipped. Used by ``scripts/train_tokenizer.py`` and ``ensure_tokenizer``.
+    """
+    from .data import iter_texts_from_sources  # local import: data.py imports this module
+
+    if not sources:
+        raise ValueError("train_tokenizer_from_sources: no data sources given")
+
+    def text_iterator():
+        count = 0
+        for text in iter_texts_from_sources(sources):
+            if count >= num_samples:
+                break
+            if text and len(text) > min_chars:
+                yield text
+                count += 1
+        print(f"  Used {count:,} text samples for tokenizer training")
+
+    print(f"Training BPE tokenizer (vocab_size={vocab_size:,}, samples<={num_samples:,}, "
+          f"{len(sources)} source(s))...")
+    tokenizer = LLMTokenizer.train(texts=text_iterator(), vocab_size=vocab_size, save_path=save_path)
+    print(f"Tokenizer saved to {save_path}/ (vocab_size={tokenizer.vocab_size})")
+
+    test_text = "The quick brown fox jumps over the lazy dog."
+    ids = tokenizer.encode(test_text)
+    print(f"Test: '{test_text}' -> {len(ids)} tokens -> '{tokenizer.decode(ids)}'")
+    return tokenizer
+
+
 def train_tokenizer_from_dataset(
     dataset_name: str = "HuggingFaceFW/fineweb-edu",
     dataset_subset: str = "sample-10BT",
     vocab_size: int = 32_000,
     save_path: str = "tokenizer_data",
     num_samples: int = 500_000,
-):
+) -> LLMTokenizer:
+    """Train a BPE tokenizer from one streaming HuggingFace dataset (see ``train_tokenizer_from_sources``)."""
+    source = {"type": "huggingface", "name": dataset_name, "subset": dataset_subset,
+              "split": "train", "text_field": "text"}
+    return train_tokenizer_from_sources([source], vocab_size, save_path, num_samples)
+
+
+def ensure_tokenizer(
+    tokenizer_path: str,
+    sources: list | None = None,
+    *,
+    vocab_size: int = 32_000,
+    num_samples: int = 50_000,
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
+    force: bool = False,
+) -> LLMTokenizer:
+    """Return a tokenizer at ``tokenizer_path``: local file, else Google Drive copy, else train it.
+
+    Lookup order (skipped with ``force``): ``<tokenizer_path>/tokenizer.json`` on disk;
+    ``tokenizer.json`` in the Drive folder ``gdrive_folder_id`` (downloaded into place);
+    finally ``train_tokenizer_from_sources(sources, ...)``, after which the new file is
+    uploaded to Drive when a folder is set. Drive steps are best effort and never abort.
     """
-    Train a BPE tokenizer from a HuggingFace dataset (streaming).
+    tok_file = os.path.join(tokenizer_path, "tokenizer.json")
 
-    Args:
-        dataset_name: HuggingFace dataset name
-        dataset_subset: Dataset subset/config
-        vocab_size: Target vocabulary size
-        save_path: Where to save tokenizer files
-        num_samples: Number of text samples to use for training
-    """
-    from itertools import islice
+    if not force and os.path.isfile(tok_file):
+        tok = LLMTokenizer(tokenizer_path)
+        print(f"Tokenizer loaded from {tokenizer_path} (vocab_size={tok.vocab_size})")
+        return tok
 
-    from datasets import load_dataset
+    if not force and gdrive_folder_id:
+        print("Tokenizer not found locally, checking Google Drive...")
+        try:
+            from .gdrive import download_from_gdrive
+            download_from_gdrive("tokenizer.json", gdrive_folder_id, tokenizer_path,
+                                 credentials_path=gdrive_credentials_path)
+            tok = LLMTokenizer(tokenizer_path)
+            print(f"  Downloaded from Google Drive (vocab_size={tok.vocab_size})")
+            return tok
+        except FileNotFoundError:
+            print("  Not found on Google Drive either.")
+        except Exception as e:
+            print(f"  ! Google Drive download failed: {e}")
 
-    print(f"Loading dataset {dataset_name}/{dataset_subset} (streaming)...")
-    ds = load_dataset(dataset_name, dataset_subset, split="train", streaming=True)
+    if not sources:
+        raise FileNotFoundError(
+            f"No tokenizer at {tok_file} and no data sources to train one from. "
+            "Run scripts/train_tokenizer.py or pass sources=."
+        )
+    tok = train_tokenizer_from_sources(sources, vocab_size, tokenizer_path, num_samples)
 
-    def text_iterator():
-        for sample in islice(ds, num_samples):
-            text = sample.get("text", "")
-            if text and len(text) > 50:  # Skip very short texts
-                yield text
-
-    print(f"Training BPE tokenizer (vocab_size={vocab_size}, samples={num_samples})...")
-    tokenizer = LLMTokenizer.train(
-        texts=text_iterator(),
-        vocab_size=vocab_size,
-        save_path=save_path,
-    )
-
-    print(f"Tokenizer saved to {save_path}/")
-    print(f"Vocab size: {tokenizer.vocab_size}")
-
-    # Quick test
-    test_text = "The quick brown fox jumps over the lazy dog."
-    ids = tokenizer.encode(test_text)
-    decoded = tokenizer.decode(ids)
-    print(f"Test encode: '{test_text}' -> {len(ids)} tokens")
-    print(f"Test decode: '{decoded}'")
-
-    return tokenizer
+    if gdrive_folder_id:
+        try:
+            from .gdrive import upload_to_gdrive
+            upload_to_gdrive(tok_file, gdrive_folder_id, credentials_path=gdrive_credentials_path)
+            print("  Uploaded tokenizer to Google Drive")
+        except Exception as e:
+            print(f"  ! Google Drive upload failed: {e}")
+    return tok
