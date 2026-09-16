@@ -23,6 +23,12 @@ cache:
   gdrive_folder_id: ""        # Colab: folder name under MyDrive (e.g. "LLM"); local: Drive folder ID from the URL
   gdrive_credentials_path: "" # Service-account JSON (API mode only; ignored on Colab)
 
+# HuggingFace access token for the sources below: never put the raw token in this file.
+# Set the HF_TOKEN environment variable (or pass hf_token= explicitly to ensure_tokenized_data /
+# ensure_tokenizer) instead -- an authenticated request gets a much higher rate limit than an
+# anonymous one. It has no effect on the fingerprint above: it changes how the data is fetched,
+# not what gets tokenized, so it never triggers a re-tokenization.
+
 # ─── Data Sources ───
 # Each source has:
 #   type:   "huggingface" | "text_dir" | "jsonl"

@@ -6,10 +6,12 @@ import torch
 
 from src.data import (
     IterableShardDataset,
+    _iter_huggingface,
     _val_every_from_processing,
     create_dataloader,
     ensure_tokenized_data_from_config,
     find_train_shards,
+    iter_texts_from_sources,
     read_manifest,
     resolve_sources,
     tokenize_and_save,
@@ -207,3 +209,49 @@ def test_ensure_tokenized_data_from_config(tmp_path, tmp_tokenizer_dir):
         base_dir=str(tmp_path),
     )
     assert read_manifest(out2)["fingerprint"] == manifest["fingerprint"]
+
+
+def test_iter_huggingface_passes_token(monkeypatch):
+    """An explicit token wins; otherwise HF_TOKEN is picked up; otherwise None (anonymous)."""
+    import datasets
+
+    calls = []
+
+    def fake_load_dataset(name, subset, split, streaming, token):
+        calls.append(token)
+        return [{"text": "x" * 60}]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+    source = {"name": "a/b", "subset": None, "split": "train"}
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    list(_iter_huggingface(source))
+    assert calls[-1] is None
+
+    monkeypatch.setenv("HF_TOKEN", "env-token")
+    list(_iter_huggingface(source))
+    assert calls[-1] == "env-token"
+
+    list(_iter_huggingface(source, token="explicit-token"))
+    assert calls[-1] == "explicit-token"  # explicit argument overrides the env var
+
+
+def test_iter_texts_from_sources_forwards_hf_token_to_huggingface_only(monkeypatch, tmp_path):
+    import datasets
+
+    calls = []
+
+    def fake_load_dataset(name, subset, split, streaming, token):
+        calls.append(token)
+        return [{"text": "x" * 60}]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+
+    txt_dir = tmp_path / "txt"
+    txt_dir.mkdir()
+    (txt_dir / "a.txt").write_text("y" * 60)
+
+    sources = [{"type": "huggingface", "name": "a/b"}, {"type": "text_dir", "path": str(txt_dir)}]
+    texts = list(iter_texts_from_sources(sources, hf_token="secret"))
+    assert calls == ["secret"]
+    assert len(texts) == 2
