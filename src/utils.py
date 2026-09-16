@@ -3,6 +3,8 @@ Utilities: checkpointing, logging, environment detection, learning rate scheduli
 """
 
 import glob
+import hashlib
+import json
 import os
 import random
 import shutil
@@ -15,6 +17,15 @@ import numpy as np
 import torch
 
 from .config import ModelConfig, TrainConfig, config_from_dict
+
+
+def sha256_file(path: str, chunk: int = 1 << 20) -> str:
+    """SHA-256 hex digest of a file's contents, read in chunks."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
 
 # ──────────────────────────────────────────────
 # Environment detection
@@ -171,6 +182,31 @@ def resolve_checkpoint_filename(resume: str) -> str:
     return f"{resume}.pt"
 
 
+def tokenizer_fingerprint(tokenizer_path: str) -> str | None:
+    """Best-effort SHA-256 of ``<tokenizer_path>/tokenizer.json``, or ``None`` if unreadable."""
+    try:
+        return sha256_file(os.path.join(tokenizer_path, "tokenizer.json"))
+    except OSError:
+        return None
+
+
+def warn_if_tokenizer_mismatch(ckpt: dict[str, Any], tokenizer_path: str) -> None:
+    """Print a warning when the checkpoint's tokenizer no longer matches the one on disk.
+
+    Never raises: a missing fingerprint on either side (legacy checkpoints, or a tokenizer
+    that can't be read) silently skips the check instead of blocking resume/inference.
+    """
+    saved = ckpt.get("tokenizer_fingerprint")
+    if not saved:
+        return
+    current = tokenizer_fingerprint(tokenizer_path)
+    if current and current != saved:
+        print(
+            f"  ! Warning: tokenizer at '{tokenizer_path}' does not match the tokenizer this "
+            "checkpoint was trained with. Embeddings may no longer align with token ids."
+        )
+
+
 def _rng_state_for_save() -> dict[str, Any]:
     """Collect RNG states in a form that ``torch.load(weights_only=True)`` accepts."""
     np_state = np.random.get_state()  # ('MT19937', ndarray[624] uint32, pos, has_gauss, cached_gaussian)
@@ -239,6 +275,7 @@ def save_checkpoint(
     epoch: int = 0,
     batches_in_epoch: int = 0,
     tokens_seen: int | None = None,
+    tokenizer_fingerprint: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> str:
     """
@@ -267,6 +304,9 @@ def save_checkpoint(
         # RNG states let a resumed run continue the *exact* same random sequence
         # (dropout masks, sampling), making results reproducible across interruptions.
         "rng_state": _rng_state_for_save(),
+        # Ties this checkpoint to the exact tokenizer.json it was trained with, so a later
+        # retrain/swap of the tokenizer can be detected instead of silently misaligning ids.
+        "tokenizer_fingerprint": tokenizer_fingerprint,
     }
     if extra:
         checkpoint.update(extra)
@@ -308,6 +348,39 @@ def save_checkpoint(
         except Exception as e:
             print(f"  ! Google Drive backup failed: {e}")
 
+    return path
+
+
+def upload_run_artifact(path: str, gdrive_folder_id: str, gdrive_credentials_path: str = "") -> None:
+    """Best-effort upload of a single run artifact (metrics history, config snapshot, ...) to Drive."""
+    if not gdrive_folder_id:
+        return
+    try:
+        from .gdrive import upload_to_gdrive
+        upload_to_gdrive(path, gdrive_folder_id, gdrive_credentials_path)
+    except Exception as e:
+        print(f"  ! Google Drive upload of {os.path.basename(path)} failed: {e}")
+
+
+def save_metrics_history(
+    history: list[dict[str, Any]],
+    checkpoint_dir: str,
+    *,
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
+) -> str:
+    """Write ``MetricsTracker.history`` to ``<checkpoint_dir>/metrics_history.json`` (atomic write).
+
+    This is the only durable copy of the loss curve when ``use_wandb`` is off. Best-effort
+    uploaded to Drive alongside checkpoints when a folder id is given.
+    """
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    path = os.path.join(checkpoint_dir, "metrics_history.json")
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(history, f)
+    os.replace(tmp_path, path)
+    upload_run_artifact(path, gdrive_folder_id, gdrive_credentials_path)
     return path
 
 

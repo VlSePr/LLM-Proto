@@ -14,7 +14,7 @@ from dataclasses import asdict
 
 import torch
 
-from .config import ModelConfig, TrainConfig, get_model_config, load_model_config, load_train_config
+from .config import ModelConfig, TrainConfig, get_model_config, load_model_config, load_train_config, save_config
 from .data import create_dataloader
 from .evaluate import compute_val_metrics
 from .model import TransformerLM
@@ -31,9 +31,13 @@ from .utils import (
     load_checkpoint,
     make_grad_scaler,
     save_checkpoint,
+    save_metrics_history,
     set_seed,
     should_compile,
+    tokenizer_fingerprint,
     unwrap_model,
+    upload_run_artifact,
+    warn_if_tokenizer_mismatch,
 )
 from .visualize import generate_all_visualizations
 
@@ -86,6 +90,7 @@ def train(
     if tokenizer.vocab_size != model_config.vocab_size:
         print(f"Note: tokenizer vocab ({tokenizer.vocab_size}) < model vocab ({model_config.vocab_size}); "
               f"{model_config.vocab_size - tokenizer.vocab_size} embedding rows will be unused.")
+    tok_fingerprint = tokenizer_fingerprint(train_config.tokenizer_path)
 
     # ── Model ──
     if model is None:
@@ -176,6 +181,16 @@ def train(
         "param_count": base_model.count_parameters(),
     })
 
+    # ── Human-readable config snapshot next to the checkpoints ──
+    os.makedirs(train_config.checkpoint_dir, exist_ok=True)
+    model_config_yaml = os.path.join(train_config.checkpoint_dir, "model_config.yaml")
+    train_config_yaml = os.path.join(train_config.checkpoint_dir, "train_config.yaml")
+    save_config(model_config, model_config_yaml)
+    save_config(train_config, train_config_yaml)
+    run_gdrive_folder = train_config.gdrive_folder_id if train_config.backup_to_gdrive else ""
+    upload_run_artifact(model_config_yaml, run_gdrive_folder, train_config.gdrive_credentials_path)
+    upload_run_artifact(train_config_yaml, run_gdrive_folder, train_config.gdrive_credentials_path)
+
     tokens_per_full_step = train_config.batch_size * seq_len * train_config.gradient_accumulation_steps
 
     # ── Resume ──
@@ -202,6 +217,7 @@ def train(
             batches_in_epoch = int(ckpt.get("batches_in_epoch") or 0)
             tokens_seen = int(ckpt.get("tokens_seen") or start_step * tokens_per_full_step)
             print(f"Continuing at step {start_step} (epoch {epoch}, batch {batches_in_epoch} in epoch)")
+            warn_if_tokenizer_mismatch(ckpt, train_config.tokenizer_path)
         elif train_config.resume_if_exists:
             print(f"No checkpoint '{train_config.resume}' found in {train_config.checkpoint_dir}; "
                   "starting from scratch (resume_if_exists=True)")
@@ -259,6 +275,7 @@ def train(
     running_aux = 0.0
     has_aux = False
     steps_in_window = 0
+    last_grad_norm = 0.0
     last_logged_loss: float | None = None
     last_val_loss: float | None = None
     improved_since_save = False   # did validation improve since the last checkpoint?
@@ -276,7 +293,13 @@ def train(
             epoch=epoch,
             batches_in_epoch=batches_in_epoch,
             tokens_seen=tokens_seen,
+            tokenizer_fingerprint=tok_fingerprint,
             extra={"moe": moe_meta} if moe_meta else None,
+        )
+        save_metrics_history(
+            tracker.history, train_config.checkpoint_dir,
+            gdrive_folder_id=run_gdrive_folder,
+            gdrive_credentials_path=train_config.gdrive_credentials_path,
         )
         improved_since_save = False
 
@@ -352,7 +375,9 @@ def train(
         # or after a bad batch). max_grad_norm=1.0 is the standard for LLM training.
         if train_config.max_grad_norm > 0:
             scaler.unscale_(optimizer)  # Unscale gradients before clipping (required for fp16)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.max_grad_norm)
+            last_grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), train_config.max_grad_norm
+            ).item()
 
         scaler.step(optimizer)
         scaler.update()
@@ -385,6 +410,8 @@ def train(
                 "train/epoch": epoch,
                 "train/elapsed_hours": timer.elapsed() / 3600,
             }
+            if train_config.max_grad_norm > 0:
+                metrics["train/grad_norm"] = last_grad_norm
             if has_aux:
                 metrics["train/aux_loss"] = running_aux / max(steps_in_window, 1)
             tracker.log(metrics, step)
@@ -555,6 +582,31 @@ def train_config_from_args(args, parser) -> TrainConfig:
     return train_config
 
 
+def resolve_run_gdrive_folder(train_config: TrainConfig, model_label: str) -> None:
+    """For a fresh run with Drive backup configured, nest checkpoints under a per-model subfolder.
+
+    Only applies when ``train_config.resume`` is empty: a resumed run must keep uploading to
+    whatever folder its earlier checkpoints already live in, so it never auto-generates a new one
+    (same contract as ``checkpoint_dir``/``resume`` themselves — the user carries it forward).
+    Mutates ``train_config.gdrive_folder_id`` in place; best-effort, never raises.
+    """
+    if train_config.resume or not (train_config.backup_to_gdrive and train_config.gdrive_folder_id):
+        return
+    try:
+        from .gdrive import default_run_folder_name, resolve_subfolder
+
+        label = os.path.splitext(os.path.basename(model_label))[0] if os.path.isfile(model_label) else model_label
+        run_folder = default_run_folder_name(label)
+        resolved = resolve_subfolder(
+            train_config.gdrive_folder_id, run_folder, train_config.gdrive_credentials_path,
+        )
+        if resolved:
+            train_config.gdrive_folder_id = resolved
+            print(f"Google Drive: using run folder '{run_folder}' under the configured root")
+    except Exception as e:
+        print(f"  ! Google Drive run-folder setup failed: {e}")
+
+
 def main():
     """CLI entry point for training."""
     import argparse
@@ -570,7 +622,9 @@ def main():
     else:
         model_config = get_model_config(args.model)
 
-    train(model_config, train_config_from_args(args, parser))
+    train_config = train_config_from_args(args, parser)
+    resolve_run_gdrive_folder(train_config, args.model)
+    train(model_config, train_config)
 
 
 if __name__ == "__main__":

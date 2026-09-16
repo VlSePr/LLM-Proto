@@ -39,9 +39,10 @@ def train_env(tmp_path, tmp_tokenizer_dir):
 def test_resume_matches_uninterrupted_run(train_env, tmp_tokenizer_dir, small_model):
     tp = train_env
     # Reference: one uninterrupted 30-step run
-    train(small_model, _cfg(tp, "ref", tokenizer_path=tmp_tokenizer_dir))
+    history = train(small_model, _cfg(tp, "ref", tokenizer_path=tmp_tokenizer_dir))
     ref = load_checkpoint_file(os.path.join(str(tp / "ckpt_ref"), "latest.pt"))
     assert ref["step"] == 29 and ref["epoch"] >= 1  # data rolled over at least once
+    assert any("train/grad_norm" in h for h in history)  # max_grad_norm defaults to 1.0
 
     # Interrupted: same 30-step schedule, stopped right after step 20, then resumed
     train(small_model, _cfg(tp, "res", tokenizer_path=tmp_tokenizer_dir), stop_after_step=20)

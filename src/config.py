@@ -65,19 +65,32 @@ class ModelConfig:
     def head_dim(self) -> int:
         return self.dim // self.n_heads
 
-    def param_count_estimate(self) -> int:
-        """Parameter count from the architecture (matches TransformerLM.count_parameters)."""
+    def param_count_breakdown(self) -> dict[str, int]:
+        """Parameter count grouped by component (embedding / attention / feed_forward / norm).
+
+        Same formula as param_count_estimate(), decomposed so callers (e.g.
+        visualize.plot_param_breakdown) can show where parameters live and how the
+        split shifts with scale.
+        """
         embed = self.vocab_size * self.dim
         # Each transformer block: attn(Q,K,V,O) + FFN(gate,up,down) + 2 norms
         attn = self.dim * (self.n_heads + 2 * self.n_kv_heads) * self.head_dim
         attn += self.n_heads * self.head_dim * self.dim  # output projection
         ffn = 3 * self.dim * self.ffn_dim  # gate, up, down projections
         norm = 2 * self.dim
-        block = attn + ffn + norm
-        total = embed + self.n_layers * block + self.dim  # + final norm
+        breakdown = {
+            "embedding": embed,
+            "attention": attn * self.n_layers,
+            "feed_forward": ffn * self.n_layers,
+            "norm": norm * self.n_layers + self.dim,  # + final norm
+        }
         if not self.tie_embeddings:
-            total += self.vocab_size * self.dim  # output projection
-        return total
+            breakdown["output_projection"] = self.vocab_size * self.dim
+        return breakdown
+
+    def param_count_estimate(self) -> int:
+        """Parameter count from the architecture (matches TransformerLM.count_parameters)."""
+        return sum(self.param_count_breakdown().values())
 
 
 @dataclass
@@ -119,7 +132,8 @@ class TrainConfig:
     keep_last_n_checkpoints: int = 5   # Disk budget: keep last 5 + best validation checkpoint
 
     # --- Google Drive backup ---
-    backup_to_gdrive: bool = False             # Upload checkpoints to Google Drive
+    # On by default, but a no-op until gdrive_folder_id names an actual folder (see save_checkpoint).
+    backup_to_gdrive: bool = True              # Upload checkpoints to Google Drive
     gdrive_folder_id: str = ""                 # Google Drive folder ID (API) or folder name (Colab)
     gdrive_credentials_path: str = ""          # Path to service account JSON or OAuth credentials
     gdrive_cleanup_remote: bool = True         # Remove old remote checkpoints (mirrors keep_last_n)

@@ -26,6 +26,8 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+from .utils import sha256_file
+
 
 class TokenizedDataset(Dataset):
     """
@@ -250,15 +252,24 @@ def processing_params(cfg: dict[str, Any]) -> dict[str, Any]:
 FORMAT_VERSION = 1            # Bump when the .bin layout, doc filter, BOS/EOS policy or split rule changes
 MANIFEST_NAME = "manifest.json"
 GDRIVE_CACHE_SUBDIR = "tokenized"
+
+# Legacy default used when a caller passes no sources at all.
+DEFAULT_HF_DATASET = ("HuggingFaceFW/fineweb-edu", "sample-10BT", "train")
+
+
+def default_sources(
+    dataset_name: str = DEFAULT_HF_DATASET[0],
+    dataset_subset: str = DEFAULT_HF_DATASET[1],
+    split: str = DEFAULT_HF_DATASET[2],
+) -> list[dict[str, Any]]:
+    """The single HuggingFace source tokenized when no sources are configured.
+
+    Every entry point that accepts an empty source list must substitute this
+    *before* computing the cache fingerprint, so the local manifest, the Drive
+    cache folder and the tokenization all describe the same data.
+    """
+    return [{"type": "huggingface", "name": dataset_name, "subset": dataset_subset, "split": split}]
 _SHARD_RE = re.compile(r"^train_\d{4}\.bin$")
-
-
-def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(chunk), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 def _canonical_hash(obj: Any) -> str:
@@ -271,7 +282,7 @@ def _describe_files(base: str, paths: list[str]) -> list[dict[str, Any]]:
     out = []
     for p in paths:
         rel = os.path.relpath(p, base).replace(os.sep, "/")
-        out.append({"path": rel, "bytes": os.path.getsize(p), "sha256": _sha256_file(p)})
+        out.append({"path": rel, "bytes": os.path.getsize(p), "sha256": sha256_file(p)})
     return out
 
 
@@ -345,7 +356,7 @@ def compute_fingerprint(
     """
     inputs = {
         "format_version": FORMAT_VERSION,
-        "tokenizer_sha256": _sha256_file(os.path.join(tokenizer_path, "tokenizer.json")),
+        "tokenizer_sha256": sha256_file(os.path.join(tokenizer_path, "tokenizer.json")),
         "shard_size": int(shard_size),
         "val_every": int(val_every),
         "max_tokens": int(max_tokens) if max_tokens else None,
@@ -420,9 +431,9 @@ def tokenize_and_save(
     sources: list[dict[str, Any]] | None = None,
     config_path: str | None = None,
     # Legacy single-source args (used when sources is None)
-    dataset_name: str = "HuggingFaceFW/fineweb-edu",
-    dataset_subset: str = "sample-10BT",
-    split: str = "train",
+    dataset_name: str = DEFAULT_HF_DATASET[0],
+    dataset_subset: str = DEFAULT_HF_DATASET[1],
+    split: str = DEFAULT_HF_DATASET[2],
     write_manifest_file: bool = True,
 ) -> dict[str, Any]:
     """
@@ -468,8 +479,7 @@ def tokenize_and_save(
         val_every = proc["val_every"]
     if not sources:
         # Legacy: single HuggingFace dataset, routed through the regular iterator
-        sources = [{"type": "huggingface", "name": dataset_name,
-                    "subset": dataset_subset, "split": split}]
+        sources = default_sources(dataset_name, dataset_subset, split)
 
     fingerprint, inputs = compute_fingerprint(tokenizer_path, sources, shard_size, val_every, max_tokens)
 
@@ -658,8 +668,18 @@ def ensure_tokenized_data(
       3. Tokenize from scratch, then upload the result to Drive (best effort —
          a failed upload is reported but never aborts the run).
 
+    An empty *sources* list falls back to :func:`default_sources` **here**, before
+    the fingerprint is computed: ``tokenize_and_save`` applies the same fallback,
+    and fingerprinting the empty list instead would make every cache lookup miss
+    while the upload lands in a folder named after the substituted source.
+
     ``force=True`` skips both caches and re-tokenizes.  Returns *output_dir*.
     """
+    if not sources:
+        sources = default_sources()
+        print(f"[data cache] ! No data sources configured — using the default HuggingFace dataset "
+              f"{sources[0]['name']} ({sources[0]['subset']}). Configure sources in data.yaml "
+              f"(or enable the HuggingFace ones) to make this explicit.")
     fingerprint, _ = compute_fingerprint(tokenizer_path, sources, shard_size, val_every, max_tokens)
     print(f"[data cache] Fingerprint {fingerprint[:12]} for {len(sources)} source(s)")
 
