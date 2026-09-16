@@ -74,18 +74,24 @@ class TokenizedDataset(Dataset):
 # Multi-source text iterators
 # ──────────────────────────────────────────────
 
-def _iter_huggingface(source: dict[str, Any]) -> Iterator[str]:
-    """Yield texts from a HuggingFace streaming dataset."""
+def _iter_huggingface(source: dict[str, Any], token: str | None = None) -> Iterator[str]:
+    """Yield texts from a HuggingFace streaming dataset.
+
+    ``token`` authenticates the request to the Hub; falls back to the ``HF_TOKEN``
+    environment variable when not given. Optional for public datasets, but an
+    authenticated request avoids the lower anonymous rate limit.
+    """
     from datasets import load_dataset
 
     name = source["name"]
     subset = source.get("subset")
     split = source.get("split", "train")
     text_field = source.get("text_field", "text")
+    token = token or os.environ.get("HF_TOKEN")
 
     # Streaming mode: no download needed — data is fetched on-the-fly in small chunks.
     # Essential for large datasets (e.g., 10B tokens) that won't fit on disk.
-    ds = load_dataset(name, subset, split=split, streaming=True)
+    ds = load_dataset(name, subset, split=split, streaming=True, token=token)
     for sample in ds:
         text = sample.get(text_field, "")
         # Skip very short documents — they add noise without meaningful context
@@ -164,10 +170,11 @@ _SOURCE_ITERATORS = {
 }
 
 
-def iter_texts_from_sources(sources: list[dict[str, Any]]) -> Iterator[str]:
+def iter_texts_from_sources(sources: list[dict[str, Any]], hf_token: str | None = None) -> Iterator[str]:
     """
     Yield texts from a list of data source dicts (as defined in data.yaml).
-    Sources are iterated sequentially in config order.
+    Sources are iterated sequentially in config order. ``hf_token`` is forwarded to
+    ``huggingface``-type sources only (see ``_iter_huggingface``).
     """
     for i, src in enumerate(sources):
         src_type = src.get("type", "huggingface")
@@ -176,7 +183,10 @@ def iter_texts_from_sources(sources: list[dict[str, Any]]) -> Iterator[str]:
             raise ValueError(f"Unknown source type: {src_type}. "
                              f"Supported: {list(_SOURCE_ITERATORS.keys())}")
         print(f"  Source {i}: {src_type} - {src.get('name') or src.get('path')}")
-        yield from iterator_fn(src)
+        if src_type == "huggingface":
+            yield from iterator_fn(src, token=hf_token)
+        else:
+            yield from iterator_fn(src)
 
 
 def load_data_config(config_path: str = "configs/data.yaml") -> dict[str, Any]:
@@ -435,6 +445,7 @@ def tokenize_and_save(
     dataset_subset: str = DEFAULT_HF_DATASET[1],
     split: str = DEFAULT_HF_DATASET[2],
     write_manifest_file: bool = True,
+    hf_token: str | None = None,
 ) -> dict[str, Any]:
     """
     Tokenize text from one or more sources and save as packed binary shards.
@@ -489,7 +500,7 @@ def tokenize_and_save(
         print(f"Removed {stale} stale file(s) from {output_dir}")
 
     print(f"Tokenizing from {len(sources)} source(s)...")
-    text_iter = iter_texts_from_sources(sources)
+    text_iter = iter_texts_from_sources(sources, hf_token=hf_token)
 
     # Tokenize and write to shards
     shard_idx = 0
@@ -656,6 +667,7 @@ def ensure_tokenized_data(
     gdrive_folder_id: str = "",
     gdrive_credentials_path: str = "",
     force: bool = False,
+    hf_token: str | None = None,
 ) -> str:
     """
     Make sure *output_dir* holds tokenized shards for the given inputs.
@@ -673,7 +685,10 @@ def ensure_tokenized_data(
     and fingerprinting the empty list instead would make every cache lookup miss
     while the upload lands in a folder named after the substituted source.
 
-    ``force=True`` skips both caches and re-tokenizes.  Returns *output_dir*.
+    ``force=True`` skips both caches and re-tokenizes.  ``hf_token`` authenticates
+    HuggingFace source requests (falls back to the ``HF_TOKEN`` env var) and is
+    deliberately excluded from the fingerprint — it doesn't change the tokenized
+    output, only how fast/reliably it's fetched.  Returns *output_dir*.
     """
     if not sources:
         sources = default_sources()
@@ -709,6 +724,7 @@ def ensure_tokenized_data(
     manifest = tokenize_and_save(
         tokenizer_path=tokenizer_path, output_dir=output_dir, sources=sources,
         max_tokens=max_tokens, shard_size=shard_size, val_every=val_every,
+        hf_token=hf_token,
     )
     if manifest["n_train_shards"] == 0:
         raise RuntimeError(
@@ -733,14 +749,16 @@ def ensure_tokenized_data_from_config(
     gdrive_credentials_path: str | None = None,
     force: bool = False,
     base_dir: str | None = None,
+    hf_token: str | None = None,
 ) -> str:
     """``ensure_tokenized_data`` driven by a ``data.yaml`` (path or loaded dict).
 
     ``tokenizer_path`` defaults to ``tokenizer.save_path`` from the config; ``max_tokens``
     overrides ``processing.max_tokens``; ``gdrive_folder_id`` / ``gdrive_credentials_path``
     override the ``cache`` block (pass ``""`` to disable Drive). ``base_dir`` absolutises
-    relative source paths and the output dir (see ``resolve_sources``). Returns the
-    shard directory. This is what ``python -m src.data`` and the notebooks call.
+    relative source paths and the output dir (see ``resolve_sources``). ``hf_token``
+    authenticates HuggingFace source requests (falls back to the ``HF_TOKEN`` env var).
+    Returns the shard directory. This is what ``python -m src.data`` and the notebooks call.
     """
     cfg = load_data_config(cfg_or_path) if isinstance(cfg_or_path, str) else cfg_or_path
     tokenizer_path = tokenizer_path or (cfg.get("tokenizer", {}) or {}).get("save_path", "tokenizer_data")
@@ -763,6 +781,7 @@ def ensure_tokenized_data_from_config(
         gdrive_folder_id=folder_id or "",
         gdrive_credentials_path=credentials or "",
         force=force,
+        hf_token=hf_token,
     )
 
 

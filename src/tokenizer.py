@@ -174,12 +174,14 @@ def train_tokenizer_from_sources(
     save_path: str = "tokenizer_data",
     num_samples: int = 50_000,
     min_chars: int = 50,
+    hf_token: str | None = None,
 ) -> LLMTokenizer:
     """Train a BPE tokenizer on up to ``num_samples`` documents from ``data.yaml``-style sources.
 
     ``sources`` is the list of source dicts (``huggingface`` / ``text_dir`` / ``jsonl``)
     consumed by ``data.iter_texts_from_sources``; documents shorter than ``min_chars`` are
-    skipped. Used by ``scripts/train_tokenizer.py`` and ``ensure_tokenizer``.
+    skipped. ``hf_token`` authenticates HuggingFace source requests (falls back to the
+    ``HF_TOKEN`` env var). Used by ``scripts/train_tokenizer.py`` and ``ensure_tokenizer``.
     """
     from .data import iter_texts_from_sources  # local import: data.py imports this module
 
@@ -188,7 +190,7 @@ def train_tokenizer_from_sources(
 
     def text_iterator():
         count = 0
-        for text in iter_texts_from_sources(sources):
+        for text in iter_texts_from_sources(sources, hf_token=hf_token):
             if count >= num_samples:
                 break
             if text and len(text) > min_chars:
@@ -213,11 +215,12 @@ def train_tokenizer_from_dataset(
     vocab_size: int = 32_000,
     save_path: str = "tokenizer_data",
     num_samples: int = 500_000,
+    hf_token: str | None = None,
 ) -> LLMTokenizer:
     """Train a BPE tokenizer from one streaming HuggingFace dataset (see ``train_tokenizer_from_sources``)."""
     source = {"type": "huggingface", "name": dataset_name, "subset": dataset_subset,
               "split": "train", "text_field": "text"}
-    return train_tokenizer_from_sources([source], vocab_size, save_path, num_samples)
+    return train_tokenizer_from_sources([source], vocab_size, save_path, num_samples, hf_token=hf_token)
 
 
 def ensure_tokenizer(
@@ -229,6 +232,7 @@ def ensure_tokenizer(
     gdrive_folder_id: str = "",
     gdrive_credentials_path: str = "",
     force: bool = False,
+    hf_token: str | None = None,
 ) -> LLMTokenizer:
     """Return a tokenizer at ``tokenizer_path``: local file, else Google Drive copy, else train it.
 
@@ -236,6 +240,8 @@ def ensure_tokenizer(
     ``tokenizer.json`` in the Drive folder ``gdrive_folder_id`` (downloaded into place);
     finally ``train_tokenizer_from_sources(sources, ...)``, after which the new file is
     uploaded to Drive when a folder is set. Drive steps are best effort and never abort.
+    ``hf_token`` authenticates HuggingFace source requests (falls back to the ``HF_TOKEN``
+    env var).
     """
     tok_file = os.path.join(tokenizer_path, "tokenizer.json")
 
@@ -263,7 +269,7 @@ def ensure_tokenizer(
             f"No tokenizer at {tok_file} and no data sources to train one from. "
             "Run scripts/train_tokenizer.py or pass sources=."
         )
-    tok = train_tokenizer_from_sources(sources, vocab_size, tokenizer_path, num_samples)
+    tok = train_tokenizer_from_sources(sources, vocab_size, tokenizer_path, num_samples, hf_token=hf_token)
 
     if gdrive_folder_id:
         try:

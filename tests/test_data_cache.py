@@ -243,7 +243,7 @@ def test_ensure_empty_sources_use_one_fingerprint_everywhere(tmp_path, tmp_token
     seen = []
     real_iter = data.iter_texts_from_sources
 
-    def fake_iter(sources):                      # stand in for the HuggingFace stream
+    def fake_iter(sources, hf_token=None):        # stand in for the HuggingFace stream
         seen.append(sources)
         return real_iter(_src(corpus))
 
