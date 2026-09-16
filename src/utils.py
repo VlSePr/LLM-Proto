@@ -562,6 +562,21 @@ def has_checkpoint(
     return False
 
 
+def checkpoint_start_step(
+    checkpoint_dir: str, resume: str, gdrive_folder_id: str = "", gdrive_credentials_path: str = "",
+) -> int:
+    """The step a resumed run would start at (0 if ``resume`` is empty or no such checkpoint exists).
+
+    A checkpoint's ``step`` is the last *completed* optimizer step (see ``save_checkpoint``), so
+    resuming continues at ``step + 1``. Useful for turning a "how many more steps" budget into the
+    absolute ``TrainConfig.max_steps`` the trainer expects, without loading the checkpoint's weights.
+    """
+    if not resume or not has_checkpoint(checkpoint_dir, resume, gdrive_folder_id, gdrive_credentials_path):
+        return 0
+    path = resolve_checkpoint_path(checkpoint_dir, resume, gdrive_folder_id, gdrive_credentials_path)
+    return load_checkpoint_file(path, device="cpu")["step"] + 1
+
+
 # ──────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────
