@@ -21,6 +21,7 @@ if not any(k in sys.modules for k in ("IPython", "ipykernel", "google.colab")):
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from .config import TrainConfig
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer
 
@@ -365,6 +366,56 @@ def generate_all_visualizations(
 
     except Exception as e:
         print(f"Warning: Visualization failed at step {step}: {e}")
+
+
+def plot_lr_schedule(train_config: TrainConfig) -> plt.Figure:
+    """Cosine-decay-with-warmup LR schedule for a TrainConfig — no training needed.
+
+    Diagnostic purpose: sanity-check warmup length vs. total steps and the decay shape
+    before spending any compute (e.g. catch warmup_steps that's accidentally most of
+    max_steps).
+    """
+    from .utils import get_lr
+
+    steps = list(range(train_config.max_steps))
+    lrs = [
+        get_lr(s, train_config.warmup_steps, train_config.max_steps, train_config.peak_lr, train_config.min_lr)
+        for s in steps
+    ]
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(steps, lrs)
+    ax.axvline(train_config.warmup_steps, color="red", linestyle="--", alpha=0.5, label="end of warmup")
+    ax.set_title("Learning Rate Schedule (cosine decay with warmup)")
+    ax.set_xlabel("step")
+    ax.set_ylabel("learning rate")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
+def plot_param_breakdown(breakdowns: dict[str, dict[str, int]]) -> plt.Figure:
+    """Stacked bar chart of parameter count by component, one bar per named config.
+
+    ``breakdowns`` maps a config name (e.g. a MODEL_CONFIGS key) to the dict returned by
+    ModelConfig.param_count_breakdown(). Diagnostic purpose: shows how the embedding/
+    attention/feed_forward/norm split shifts with scale — embedding dominates small
+    tied-embedding models, feed_forward dominates at scale (SwiGLU's 3-matrix design).
+    """
+    names = list(breakdowns.keys())
+    components = sorted({c for b in breakdowns.values() for c in b})
+    fig, ax = plt.subplots(figsize=(max(6, len(names) * 1.2), 5))
+    bottom = np.zeros(len(names))
+    for comp in components:
+        vals = np.array([breakdowns[n].get(comp, 0) / 1e6 for n in names])
+        ax.bar(names, vals, bottom=bottom, label=comp)
+        bottom += vals
+    ax.set_ylabel("Parameters (M)")
+    ax.set_title("Parameter Count by Component")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.tight_layout()
+    return fig
 
 
 def plot_training_curves(history: list, keys: tuple = ("train/loss", "val/loss", "train/aux_loss")) -> plt.Figure:

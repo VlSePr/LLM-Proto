@@ -275,6 +275,7 @@ def train(
     running_aux = 0.0
     has_aux = False
     steps_in_window = 0
+    last_grad_norm = 0.0
     last_logged_loss: float | None = None
     last_val_loss: float | None = None
     improved_since_save = False   # did validation improve since the last checkpoint?
@@ -374,7 +375,9 @@ def train(
         # or after a bad batch). max_grad_norm=1.0 is the standard for LLM training.
         if train_config.max_grad_norm > 0:
             scaler.unscale_(optimizer)  # Unscale gradients before clipping (required for fp16)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.max_grad_norm)
+            last_grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), train_config.max_grad_norm
+            ).item()
 
         scaler.step(optimizer)
         scaler.update()
@@ -407,6 +410,8 @@ def train(
                 "train/epoch": epoch,
                 "train/elapsed_hours": timer.elapsed() / 3600,
             }
+            if train_config.max_grad_norm > 0:
+                metrics["train/grad_norm"] = last_grad_norm
             if has_aux:
                 metrics["train/aux_loss"] = running_aux / max(steps_in_window, 1)
             tracker.log(metrics, step)

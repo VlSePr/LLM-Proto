@@ -1,6 +1,7 @@
 import pytest
 
 from src.config import (
+    MODEL_CONFIGS,
     ModelConfig,
     TrainConfig,
     config_from_dict,
@@ -68,3 +69,9 @@ def test_param_count_estimate_matches_model(tiny_cfg):
     from src.model import TransformerLM
     model = TransformerLM(tiny_cfg)
     assert tiny_cfg.param_count_estimate() == model.count_parameters(trainable_only=False)
+
+
+@pytest.mark.parametrize("name", list(MODEL_CONFIGS))
+def test_param_count_breakdown_sums_to_estimate(name):
+    cfg = get_model_config(name)
+    assert sum(cfg.param_count_breakdown().values()) == cfg.param_count_estimate()
