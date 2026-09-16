@@ -10,6 +10,7 @@ from src.model import FeedForward, TransformerLM
 from src.moe import SparseMoE, graft_moe, moe_metadata
 from src.utils import (
     build_model_from_checkpoint,
+    checkpoint_start_step,
     cleanup_checkpoints,
     has_checkpoint,
     load_checkpoint,
@@ -122,6 +123,16 @@ def test_has_checkpoint_and_cleanup(tiny_cfg, tmp_path):
     # keep_n <= 0 keeps everything
     cleanup_checkpoints(tcfg.checkpoint_dir, 0)
     assert len([f for f in os.listdir(tcfg.checkpoint_dir) if f.startswith("step_")]) == 2
+
+
+def test_checkpoint_start_step(tiny_cfg, tmp_path):
+    model = TransformerLM(tiny_cfg)
+    tcfg = _train_cfg(tmp_path)
+    assert checkpoint_start_step(tcfg.checkpoint_dir, "") == 0
+    assert checkpoint_start_step(tcfg.checkpoint_dir, "latest") == 0
+    save_checkpoint(model, None, 7, None, tiny_cfg, tcfg, tcfg.checkpoint_dir)
+    assert checkpoint_start_step(tcfg.checkpoint_dir, "latest") == 8
+    assert checkpoint_start_step(tcfg.checkpoint_dir, "step_7") == 8
 
 
 def test_resolve_checkpoint_path(tiny_cfg, tmp_path):
