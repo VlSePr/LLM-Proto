@@ -119,7 +119,8 @@ class TrainConfig:
     keep_last_n_checkpoints: int = 5   # Disk budget: keep last 5 + best validation checkpoint
 
     # --- Google Drive backup ---
-    backup_to_gdrive: bool = False             # Upload checkpoints to Google Drive
+    # On by default, but a no-op until gdrive_folder_id names an actual folder (see save_checkpoint).
+    backup_to_gdrive: bool = True              # Upload checkpoints to Google Drive
     gdrive_folder_id: str = ""                 # Google Drive folder ID (API) or folder name (Colab)
     gdrive_credentials_path: str = ""          # Path to service account JSON or OAuth credentials
     gdrive_cleanup_remote: bool = True         # Remove old remote checkpoints (mirrors keep_last_n)

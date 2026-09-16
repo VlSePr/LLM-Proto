@@ -215,7 +215,7 @@ class TrainConfig:
     keep_last_n_checkpoints: int = 5        # Auto-cleanup old checkpoints
 
     # --- Google Drive Backup ---
-    backup_to_gdrive: bool = False
+    backup_to_gdrive: bool = True           # No-op until gdrive_folder_id names a folder
     gdrive_folder_id: str = ""
     gdrive_credentials_path: str = ""
 
@@ -664,7 +664,7 @@ scaler = GradScaler(enabled=(dtype == torch.float16))
 |---|---|---|
 | **Logging** | Every 10 steps | Loss, perplexity, LR, tokens/sec → Wandb + console |
 | **Validation** | Every 500 steps | Run model on val set, compute avg loss + perplexity |
-| **Checkpoint** | Every 500 steps | Save model + optimizer + RNG state + configs |
+| **Checkpoint** | Every 500 steps | Save model + optimizer + scaler + RNG state + configs + tokenizer fingerprint |
 | **Generation** | Every 1000 steps | Generate text from sample prompts (qualitative check) |
 | **Visualization** | Every 1000 steps | Attention maps, weight distributions, activation stats |
 
@@ -675,9 +675,15 @@ Each `.pt` checkpoint file contains:
 ```python
 {
     "step": 5000,
+    "epoch": 0,                          # Current epoch (train loader reshuffles shards per epoch)
+    "batches_in_epoch": 1200,            # Train batches consumed so far this epoch (exact resume position)
+    "tokens_seen": 20_971_520,           # Cumulative tokens processed
     "loss": 3.2145,
+    "val_loss": 3.05,                    # Last computed validation loss (None until the first eval)
+    "best_val_loss": 3.05,               # Best validation loss so far
     "model_state_dict": {...},          # All model weights
     "optimizer_state_dict": {...},       # Adam momentum + variance buffers
+    "scaler_state_dict": {...},          # GradScaler state — only non-None on the fp16 path
     "model_config": {...},               # Architecture params (for reconstruction)
     "train_config": {...},               # Training hyperparams
     "rng_state": {                       # For exact reproducibility on resume
@@ -686,8 +692,16 @@ Each `.pt` checkpoint file contains:
         "torch": ...,
         "cuda": ...,
     },
+    "tokenizer_fingerprint": "…",        # sha256 of tokenizer.json at save time (None if unreadable)
+    "moe": {...},                        # Only present for MoE-grafted checkpoints (see §18.3)
 }
 ```
+
+`checkpoint_dir` also carries three sibling files, refreshed on the same cadence as the checkpoints:
+`metrics_history.json` (the full logged metric history — the only durable copy of the loss curve when
+`use_wandb=False`), `model_config.yaml` and `train_config.yaml` (human-readable snapshots via
+`config.save_config`, written once the run starts). With `backup_to_gdrive=True` all of these, plus the
+tokenizer and tokenized-data cache, are backed up into one per-run Drive folder (see §12).
 
 ### 7.8 CLI Entry Point
 
@@ -706,10 +720,13 @@ Supports overriding any `TrainConfig` field from the command line.
 ### 8.1 Model Loading
 
 ```python
-model, tokenizer = load_model_for_inference("tiny", "checkpoints/latest.pt")
+model, tokenizer = load_model_for_inference("checkpoints/latest.pt")
 ```
 
-Loads model config from the checkpoint, rebuilds the architecture, loads weights, and loads the tokenizer.
+Loads model config from the checkpoint, rebuilds the architecture, loads weights, and loads the tokenizer
+(warning — never raising — if the tokenizer on disk no longer matches the checkpoint's
+`tokenizer_fingerprint`). `model_config_name` (a preset name or YAML path) is only needed as a fallback for
+old checkpoints that predate `model_config` being stored.
 
 ### 8.2 Generation with KV-Cache
 
@@ -864,6 +881,12 @@ Loads checkpoint, restoring:
 has_checkpoint(dir, resume, gdrive_folder_id)  # Check existence locally or on Drive
 ```
 
+```python
+tokenizer_fingerprint(tokenizer_path)          # sha256 of tokenizer.json, or None
+warn_if_tokenizer_mismatch(ckpt, tokenizer_path)  # Prints (never raises) if it no longer matches
+save_metrics_history(history, checkpoint_dir, gdrive_folder_id="")  # Writes metrics_history.json
+```
+
 ### 11.3 Metrics & Logging
 
 ```python
@@ -926,9 +949,23 @@ For non-Colab environments:
 | `upload_to_gdrive(local_path, folder_id, creds)` | Upload a file (create or update) |
 | `download_from_gdrive(filename, folder_id, local_dir, creds)` | Download a file by name (atomic: `.part` then rename) |
 | `resolve_subfolder(parent, name, creds, create=True)` | Folder handle for `parent/name` — nested name on Colab, folder ID in API mode; `create=False` returns `None` when absent |
+| `default_run_folder_name(label)` | `"<label>-<UTC timestamp>"` — the default per-run subfolder name |
 | `list_remote_checkpoints(folder_id, creds)` | List all `.pt` files in folder |
 | `cleanup_remote_checkpoints(folder_id, keep_n, creds)` | Remove old `step_*.pt` files |
 | `reset_service()` | Clear cached API client (re-authenticate) |
+
+### 12.4 Per-run Drive folder
+
+`TrainConfig.backup_to_gdrive` defaults to `True` (a no-op until `gdrive_folder_id` names an actual
+folder). For a **fresh** CLI run (`python -m src.train`, `train_config.resume` empty) with both set,
+`train.resolve_run_gdrive_folder` nests everything under `resolve_subfolder(gdrive_folder_id,
+default_run_folder_name(model_label), ...)` and overwrites `train_config.gdrive_folder_id` with the
+resolved handle before training starts, so checkpoints, `metrics_history.json` and the config snapshots
+all land in `<gdrive_folder_id>/<model_label>-<timestamp>/`. The notebook does the equivalent up front
+(cell 2b, `GDRIVE_MODEL_FOLDER`) and additionally threads that same folder into `ensure_tokenizer` and
+`ensure_tokenized_data_from_config`, so the tokenizer and tokenized-data cache land there too. Resuming a
+run never auto-generates a new folder — the user must set `gdrive_folder_id` to the exact folder the
+original run printed, the same contract already used for `checkpoint_dir`/`resume`.
 
 ---
 

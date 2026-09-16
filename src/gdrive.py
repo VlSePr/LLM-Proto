@@ -21,8 +21,19 @@ import glob
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 
 _COLAB_MOUNT = "/content/drive"
+
+
+def default_run_folder_name(label: str) -> str:
+    """A timestamped Drive subfolder name identifying a training run, e.g. ``'tiny-20260916-143512'``.
+
+    Used to nest a run's checkpoints, config snapshots, metric history, tokenizer and tokenized-data
+    cache under one folder instead of a flat shared ``gdrive_folder_id``.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{label}-{ts}"
 
 
 # ──────────────────────────────────────────────

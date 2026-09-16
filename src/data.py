@@ -26,6 +26,8 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+from .utils import sha256_file
+
 
 class TokenizedDataset(Dataset):
     """
@@ -270,14 +272,6 @@ def default_sources(
 _SHARD_RE = re.compile(r"^train_\d{4}\.bin$")
 
 
-def _sha256_file(path: str, chunk: int = 1 << 20) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(chunk), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
 def _canonical_hash(obj: Any) -> str:
     payload = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -288,7 +282,7 @@ def _describe_files(base: str, paths: list[str]) -> list[dict[str, Any]]:
     out = []
     for p in paths:
         rel = os.path.relpath(p, base).replace(os.sep, "/")
-        out.append({"path": rel, "bytes": os.path.getsize(p), "sha256": _sha256_file(p)})
+        out.append({"path": rel, "bytes": os.path.getsize(p), "sha256": sha256_file(p)})
     return out
 
 
@@ -362,7 +356,7 @@ def compute_fingerprint(
     """
     inputs = {
         "format_version": FORMAT_VERSION,
-        "tokenizer_sha256": _sha256_file(os.path.join(tokenizer_path, "tokenizer.json")),
+        "tokenizer_sha256": sha256_file(os.path.join(tokenizer_path, "tokenizer.json")),
         "shard_size": int(shard_size),
         "val_every": int(val_every),
         "max_tokens": int(max_tokens) if max_tokens else None,

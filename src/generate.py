@@ -9,7 +9,7 @@ import torch
 from .corpus import strip_special_token_text
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer
-from .utils import build_model_from_checkpoint, get_device
+from .utils import build_model_from_checkpoint, get_device, warn_if_tokenizer_mismatch
 
 
 def clean_generated_text(text: str) -> str:
@@ -43,6 +43,7 @@ def load_model_for_inference(
     model, ckpt = build_model_from_checkpoint(checkpoint_path, device, model_config_name)
     tokenizer_path = (ckpt.get("train_config") or {}).get("tokenizer_path", "tokenizer_data")
     tokenizer = LLMTokenizer(tokenizer_path)
+    warn_if_tokenizer_mismatch(ckpt, tokenizer_path)
     return model, tokenizer
 
 
