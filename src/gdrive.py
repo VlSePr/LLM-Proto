@@ -173,6 +173,44 @@ def resolve_subfolder(
     return result["id"]
 
 
+def find_latest_run_folder(
+    parent_folder_id: str,
+    label: str,
+    credentials_path: str = "",
+) -> str | None:
+    """Most recently created ``"<label>-<timestamp>"`` subfolder under *parent_folder_id*, or ``None``.
+
+    ``default_run_folder_name`` nests a fresh run's checkpoints under a new timestamped subfolder
+    of the stable top-level Drive folder. This lets a resume that's still pointed at that stable
+    folder (rather than the exact subfolder the original run printed) find the right checkpoint
+    instead of silently starting a new model from scratch.
+    """
+    prefix = f"{label}-"
+
+    if _is_colab():
+        parent_path = _colab_folder(parent_folder_id, create=False)
+        if not os.path.isdir(parent_path):
+            return None
+        candidates = sorted(
+            name for name in os.listdir(parent_path)
+            if name.startswith(prefix) and os.path.isdir(os.path.join(parent_path, name))
+        )
+        return f"{parent_folder_id}/{candidates[-1]}" if candidates else None
+
+    service = _get_service(credentials_path)
+    query = (
+        f"'{parent_folder_id}' in parents and name contains '{prefix}' "
+        f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
+    )
+    resp = (
+        service.files()
+        .list(q=query, fields="files(id, name)", orderBy="createdTime desc")
+        .execute()
+    )
+    files = resp.get("files", [])
+    return files[0]["id"] if files else None
+
+
 def upload_to_gdrive(
     local_path: str,
     folder_id: str,
