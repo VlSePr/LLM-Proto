@@ -632,16 +632,20 @@ def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_i
 
     os.makedirs(output_dir, exist_ok=True)
     _clear_shards(output_dir)
+    files = remote.get("files", [])
     total_bytes = 0
-    for entry in remote.get("files", []):
-        path = gdrive.download_from_gdrive(entry["name"], folder, output_dir, credentials_path)
-        actual = os.path.getsize(path)
-        if actual != entry["bytes"]:
-            raise RuntimeError(f"size mismatch after download: {entry['name']} ({actual} != {entry['bytes']})")
-        total_bytes += actual
+    with tqdm(total=sum(entry["bytes"] for entry in files), unit="B", unit_scale=True,
+              unit_divisor=1024, desc="[data cache] Downloading from Google Drive") as pbar:
+        for entry in files:
+            pbar.set_postfix_str(entry["name"])
+            path = gdrive.download_from_gdrive(entry["name"], folder, output_dir, credentials_path)
+            actual = os.path.getsize(path)
+            if actual != entry["bytes"]:
+                raise RuntimeError(f"size mismatch after download: {entry['name']} ({actual} != {entry['bytes']})")
+            total_bytes += actual
+            pbar.update(actual)
     write_manifest(output_dir, remote)
-    print(f"[data cache] Downloaded {len(remote.get('files', []))} file(s), "
-          f"{total_bytes / 1e6:.1f} MB from Google Drive")
+    print(f"[data cache] Downloaded {len(files)} file(s), {total_bytes / 1e6:.1f} MB from Google Drive")
     return remote
 
 

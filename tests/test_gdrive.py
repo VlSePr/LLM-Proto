@@ -22,11 +22,16 @@ class FakeFiles:
 
     def list(self, q, fields, orderBy=None):
         self.queries.append({"q": q, "fields": fields, "orderBy": orderBy})
-        hits = [f for f in self.folders
-                if f"'{f['parent']}' in parents" in q and f"name = '{f['name']}'" in q]
+        hits = [
+            f for f in self.folders
+            if f"'{f['parent']}' in parents" in q
+            and (f"name = '{f['name']}'" in q or f"name contains '{f['name'].split('-')[0]}-'" in q)
+        ]
         if orderBy == "createdTime":
             hits.sort(key=lambda f: f["created"])
-        return _Call({"files": [{"id": f["id"]} for f in hits]})
+        elif orderBy == "createdTime desc":
+            hits.sort(key=lambda f: f["created"], reverse=True)
+        return _Call({"files": [{"id": f["id"], "name": f["name"]} for f in hits]})
 
     def create(self, body, fields, **kw):
         new = {"id": f"new-{len(self.created)}", "name": body["name"],
@@ -87,6 +92,37 @@ def test_find_folder_query_filters_folder_mimetype(api_mode, monkeypatch):
     assert "mimeType = 'application/vnd.google-apps.folder'" in q["q"]
     assert "trashed = false" in q["q"]
     assert q["orderBy"] == "createdTime"
+
+
+def test_find_latest_run_folder_picks_most_recent_matching_prefix(api_mode, monkeypatch):
+    svc = _install(monkeypatch, FakeService([
+        {"id": "old-base", "name": "base-20260101-000000", "parent": "root", "created": 1},
+        {"id": "new-base", "name": "base-20260202-000000", "parent": "root", "created": 2},
+        {"id": "other-size", "name": "tiny-20260303-000000", "parent": "root", "created": 3},
+    ]))
+    assert gdrive.find_latest_run_folder("root", "base") == "new-base"
+    assert svc.files().queries[0]["orderBy"] == "createdTime desc"
+
+
+def test_find_latest_run_folder_returns_none_when_no_match(api_mode, monkeypatch):
+    _install(monkeypatch, FakeService([
+        {"id": "other-size", "name": "tiny-20260303-000000", "parent": "root", "created": 1},
+    ]))
+    assert gdrive.find_latest_run_folder("root", "base") is None
+
+
+def test_find_latest_run_folder_colab_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr(gdrive, "_is_colab", lambda: True)
+    mydrive = tmp_path / "MyDrive"
+    (mydrive / "LLM" / "base-20260101-000000").mkdir(parents=True)
+    (mydrive / "LLM" / "base-20260202-000000").mkdir(parents=True)
+    (mydrive / "LLM" / "tiny-20260303-000000").mkdir(parents=True)
+    monkeypatch.setattr(gdrive, "_COLAB_MOUNT", str(tmp_path))
+    monkeypatch.setattr(gdrive, "_ensure_colab_mount", lambda: None)
+
+    assert gdrive.find_latest_run_folder("LLM", "base") == "LLM/base-20260202-000000"
+    assert gdrive.find_latest_run_folder("LLM", "missing") is None
+    assert gdrive.find_latest_run_folder("does-not-exist", "base") is None
 
 
 def test_describe_drive_setup_api_mode(monkeypatch, tmp_path):
