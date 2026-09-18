@@ -550,10 +550,13 @@ def has_checkpoint(
     if os.path.exists(os.path.join(checkpoint_dir, filename)):
         return True
 
-    # Check Google Drive
+    # Check Google Drive (Colab: mounted-filesystem path; local/vast.ai: REST API)
     if gdrive_folder_id:
         try:
-            from .gdrive import _find_file, _get_service
+            from .gdrive import _colab_folder, _find_file, _get_service, _is_colab
+            if _is_colab():
+                path = os.path.join(_colab_folder(gdrive_folder_id, create=False), filename)
+                return os.path.exists(path)
             service = _get_service(gdrive_credentials_path)
             return _find_file(service, filename, gdrive_folder_id) is not None
         except Exception:
