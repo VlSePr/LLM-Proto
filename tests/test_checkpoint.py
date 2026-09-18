@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+from src import gdrive
 from src.config import MoEConfig, TrainConfig
 from src.model import FeedForward, TransformerLM
 from src.moe import SparseMoE, graft_moe, moe_metadata
@@ -123,6 +124,35 @@ def test_has_checkpoint_and_cleanup(tiny_cfg, tmp_path):
     # keep_n <= 0 keeps everything
     cleanup_checkpoints(tcfg.checkpoint_dir, 0)
     assert len([f for f in os.listdir(tcfg.checkpoint_dir) if f.startswith("step_")]) == 2
+
+
+def test_has_checkpoint_colab_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(gdrive, "_is_colab", lambda: True)
+    monkeypatch.setattr(gdrive, "_COLAB_MOUNT", str(tmp_path))
+    monkeypatch.setattr(gdrive, "_ensure_colab_mount", lambda: None)
+
+    drive_folder = tmp_path / "MyDrive" / "LLM" / "run-1"
+    drive_folder.mkdir(parents=True)
+    local_ckpt_dir = str(tmp_path / "local_ckpt")
+
+    assert not has_checkpoint(local_ckpt_dir, "latest", "LLM/run-1")
+    (drive_folder / "latest.pt").touch()
+    assert has_checkpoint(local_ckpt_dir, "latest", "LLM/run-1")
+    assert not has_checkpoint(local_ckpt_dir, "best", "LLM/run-1")
+
+    # A local file still short-circuits before any Drive/Colab probe.
+    os.makedirs(local_ckpt_dir, exist_ok=True)
+    open(os.path.join(local_ckpt_dir, "best.pt"), "w").close()
+    assert has_checkpoint(local_ckpt_dir, "best", "LLM/run-1")
+
+
+def test_has_checkpoint_colab_mount_failure_returns_false(tmp_path, monkeypatch):
+    def boom():
+        raise RuntimeError("no drive mounted")
+
+    monkeypatch.setattr(gdrive, "_is_colab", lambda: True)
+    monkeypatch.setattr(gdrive, "_ensure_colab_mount", boom)
+    assert not has_checkpoint(str(tmp_path / "ckpt"), "latest", "LLM/run-1")
 
 
 def test_checkpoint_start_step(tiny_cfg, tmp_path):
