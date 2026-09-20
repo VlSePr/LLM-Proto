@@ -21,6 +21,7 @@ service_account*.json
 client_secret*.json
 token.json
 configs/local.yaml
+scripts/local/
 
 # Python
 __pycache__/

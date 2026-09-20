@@ -49,6 +49,17 @@ re-tokenized. With `cache.gdrive_folder_id` set (or `--gdrive_folder_id`), a loc
 `<folder>/tokenized/<fingerprint>/` on Google Drive, and freshly built shards are uploaded there.
 An existing `data/` without a manifest is re-tokenized once.
 
+**Already-tokenized datasets on Drive.** The fingerprint cache only finds data built from the sources in
+*this* `data.yaml`; a dataset built from other sources (e.g. `scripts/local/`) has a different fingerprint.
+To use such a dataset as it is, point at its Drive folder (it must hold `train_NNNN.bin`, `val.bin` and
+`manifest.json` directly). This never tokenizes; the only check is that the tokenizer matches:
+
+```bash
+python -m src.data --prebuilt_folder LLM/gutenberg --output_dir data/gutenberg   # Colab folder path / Drive folder ID
+```
+
+In `LLM_proto.ipynb` set `GDRIVE_DATASET_FOLDER = "LLM/gutenberg"`; it is restored into `data/<folder name>/`.
+
 ### 4. Train a model
 
 ```bash

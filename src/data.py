@@ -524,41 +524,54 @@ def tokenize_and_save(
         shard_idx += 1
         buf_pos = 0
 
-    for doc_idx, text in enumerate(tqdm(text_iter, desc="Tokenizing")):
-        if not text or len(text) < 50:
-            continue
-
-        ids = tok.encode(text, add_bos=True, add_eos=True)
-
-        # Interleaved train/val split: every val_every-th document → validation.
-        # Using document index ensures deterministic splitting regardless of text content.
-        is_val = (doc_idx % val_every == 0)
-
-        if is_val:
-            val_buffer.extend(ids)
-            val_tokens += len(ids)
-        else:
-            ids_arr = np.array(ids, dtype=np.uint16)
-            # Clip to remaining token budget before writing
-            if max_tokens:
-                ids_arr = ids_arr[: max(0, max_tokens - token_count)]
-            # Vectorised fill: write token blocks into the buffer, flushing
-            # complete shards to disk as each one fills up.  This replaces a
-            # Python for-loop over individual tokens, which is ~50–100× slower
-            # for long documents (numpy slice assignment is a single C memcpy).
-            pos = 0
-            while pos < len(ids_arr):
-                space = shard_size - buf_pos
-                take = min(len(ids_arr) - pos, space)
-                buffer[buf_pos : buf_pos + take] = ids_arr[pos : pos + take]
-                buf_pos += take
-                token_count += take
-                pos += take
-                if buf_pos >= shard_size:
-                    _flush_shard()
-
-        if max_tokens and token_count >= max_tokens:
+    # Documents are tokenized in batches via `encode_batch`, which hands the whole
+    # batch to the Rust-backed tokenizer at once so it can encode across CPU cores
+    # in parallel — a single-document-at-a-time `encode()` loop never leaves Python,
+    # so it can only ever use one core.
+    TOKENIZE_BATCH_SIZE = 64
+    progress = tqdm(desc="Tokenizing", unit="doc")
+    stop = False
+    indexed_texts = enumerate(text_iter)
+    while not stop:
+        batch = list(itertools.islice(indexed_texts, TOKENIZE_BATCH_SIZE))
+        if not batch:
             break
+        valid = [(doc_idx, text) for doc_idx, text in batch if text and len(text) >= 50]
+        encoded = tok.encode_batch([text for _, text in valid], add_bos=True, add_eos=True) if valid else []
+
+        for (doc_idx, _text), ids in zip(valid, encoded, strict=True):
+            # Interleaved train/val split: every val_every-th document → validation.
+            # Using document index ensures deterministic splitting regardless of text content.
+            is_val = (doc_idx % val_every == 0)
+
+            if is_val:
+                val_buffer.extend(ids)
+                val_tokens += len(ids)
+            else:
+                ids_arr = np.array(ids, dtype=np.uint16)
+                # Clip to remaining token budget before writing
+                if max_tokens:
+                    ids_arr = ids_arr[: max(0, max_tokens - token_count)]
+                # Vectorised fill: write token blocks into the buffer, flushing
+                # complete shards to disk as each one fills up.  This replaces a
+                # Python for-loop over individual tokens, which is ~50–100× slower
+                # for long documents (numpy slice assignment is a single C memcpy).
+                pos = 0
+                while pos < len(ids_arr):
+                    space = shard_size - buf_pos
+                    take = min(len(ids_arr) - pos, space)
+                    buffer[buf_pos : buf_pos + take] = ids_arr[pos : pos + take]
+                    buf_pos += take
+                    token_count += take
+                    pos += take
+                    if buf_pos >= shard_size:
+                        _flush_shard()
+
+            if max_tokens and token_count >= max_tokens:
+                stop = True
+                break
+        progress.update(len(batch))
+    progress.close()
 
     # Flush remaining train tokens
     if buf_pos > 0:
@@ -608,6 +621,17 @@ def _remote_cache_folder(fingerprint: str, root_folder_id: str, credentials_path
     return gdrive.resolve_subfolder(sub, fingerprint[:12], credentials_path, create=create)
 
 
+def _download_remote_manifest(folder: str, credentials_path: str) -> dict[str, Any]:
+    """Read ``manifest.json`` from the Drive *folder*; ``FileNotFoundError`` if absent or unreadable."""
+    from . import gdrive
+    with tempfile.TemporaryDirectory() as td:
+        gdrive.download_from_gdrive(MANIFEST_NAME, folder, td, credentials_path)
+        remote = read_manifest(td)
+    if remote is None:
+        raise FileNotFoundError("remote manifest is unreadable")
+    return remote
+
+
 def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_id: str,
                                 credentials_path: str) -> dict[str, Any]:
     """Fetch a cached tokenization from Drive into *output_dir*.
@@ -617,19 +641,24 @@ def _download_cache_from_gdrive(fingerprint: str, output_dir: str, root_folder_i
     The local manifest is written last, so a partially fetched directory is
     never mistaken for a valid cache.
     """
-    from . import gdrive
     folder = _remote_cache_folder(fingerprint, root_folder_id, credentials_path, create=False)
     if folder is None:
         raise FileNotFoundError(f"no '{GDRIVE_CACHE_SUBDIR}/{fingerprint[:12]}' folder on Drive")
 
-    with tempfile.TemporaryDirectory() as td:
-        gdrive.download_from_gdrive(MANIFEST_NAME, folder, td, credentials_path)
-        remote = read_manifest(td)
-    if remote is None:
-        raise FileNotFoundError("remote manifest is unreadable")
+    remote = _download_remote_manifest(folder, credentials_path)
     if remote.get("fingerprint") != fingerprint or remote.get("format_version") != FORMAT_VERSION:
         raise FileNotFoundError("remote manifest does not match the requested fingerprint")
+    return _download_folder(folder, remote, output_dir, credentials_path)
 
+
+def _download_folder(folder: str, remote: dict[str, Any], output_dir: str,
+                     credentials_path: str) -> dict[str, Any]:
+    """Download every file listed in *remote* (the manifest of Drive *folder*) into *output_dir*.
+
+    Existing shards in *output_dir* are cleared first and the manifest is written
+    last. ``RuntimeError`` when a downloaded file's size differs from the manifest.
+    """
+    from . import gdrive
     os.makedirs(output_dir, exist_ok=True)
     _clear_shards(output_dir)
     files = remote.get("files", [])
@@ -787,6 +816,78 @@ def ensure_tokenized_data_from_config(
         force=force,
         hf_token=hf_token,
     )
+
+
+def dataset_output_dir(base_dir: str, gdrive_folder: str) -> str:
+    """Local directory for a pre-tokenized Drive folder: ``<base_dir>/<last folder name>``.
+
+    Each dataset gets its own directory, so switching datasets never clears the shards
+    of another one (``tokenize_and_save`` and the Drive download both wipe their target).
+    """
+    name = gdrive_folder.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    if not name:
+        raise ValueError(f"cannot derive a dataset name from Drive folder {gdrive_folder!r}")
+    return os.path.join(base_dir, name)
+
+
+def fetch_prebuilt_dataset(
+    tokenizer_path: str,
+    output_dir: str,
+    gdrive_folder: str,
+    gdrive_credentials_path: str = "",
+    force: bool = False,
+) -> str:
+    """
+    Use an already-tokenized dataset from a Google Drive folder, exactly as it is.
+
+    Unlike :func:`ensure_tokenized_data` this never computes an expected fingerprint and
+    never tokenizes: the folder's own ``manifest.json`` says what it holds. *gdrive_folder*
+    must contain ``train_NNNN.bin`` / ``val.bin`` / ``manifest.json`` directly (Colab: a
+    folder path under MyDrive such as ``"LLM/gutenberg"``; elsewhere: the Drive folder ID).
+
+    The only compatibility check is the tokenizer: the manifest's tokenizer sha256 must match
+    ``<tokenizer_path>/tokenizer.json``, otherwise the token ids in the shards are meaningless
+    (``ValueError``). A missing manifest raises ``FileNotFoundError``. If *output_dir* already
+    holds an identical, complete copy (same fingerprint, all file sizes match) nothing is
+    downloaded, unless ``force=True``. Returns *output_dir*.
+    """
+    if not gdrive_folder:
+        raise ValueError("gdrive_folder is required")
+    try:
+        remote = _download_remote_manifest(gdrive_folder, gdrive_credentials_path)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"Drive folder '{gdrive_folder}' has no usable {MANIFEST_NAME} ({e}). A pre-tokenized "
+            f"dataset folder must hold train_NNNN.bin, val.bin and {MANIFEST_NAME} directly."
+        ) from e
+
+    if remote.get("format_version") != FORMAT_VERSION:
+        raise ValueError(f"Drive folder '{gdrive_folder}' has manifest format_version "
+                         f"{remote.get('format_version')!r}, expected {FORMAT_VERSION}")
+    remote_sha = (remote.get("tokenizer") or {}).get("sha256")
+    local_sha = sha256_file(os.path.join(tokenizer_path, "tokenizer.json"))
+    if remote_sha != local_sha:
+        raise ValueError(
+            f"Drive folder '{gdrive_folder}' was tokenized with a different tokenizer "
+            f"(sha256 {str(remote_sha)[:12]} != {local_sha[:12]} of {tokenizer_path}/tokenizer.json); "
+            f"its token ids would be meaningless to this model."
+        )
+
+    fingerprint = remote.get("fingerprint", "")
+    if not force:
+        ok, reason = validate_local_cache(output_dir, fingerprint)
+        if ok:
+            print(f"[data cache] {gdrive_folder} already in {output_dir} — skipping download")
+            return output_dir
+        print(f"[data cache] Local copy in {output_dir} not usable ({reason})")
+
+    print(f"[data cache] Using pre-tokenized dataset from Drive folder '{gdrive_folder}' "
+          f"({remote.get('train_tokens', 0):,} train tokens)")
+    _download_folder(gdrive_folder, remote, output_dir, gdrive_credentials_path)
+    ok, reason = validate_local_cache(output_dir, fingerprint)
+    if not ok:
+        raise RuntimeError(f"Downloaded dataset from '{gdrive_folder}' failed validation ({reason})")
+    return output_dir
 
 
 def find_train_shards(data_dir: str) -> list[str]:
@@ -1138,7 +1239,23 @@ def main():
                         help="Override cache.gdrive_credentials_path (service-account JSON)")
     parser.add_argument("--no_gdrive", action="store_true", help="Skip the Google Drive cache")
     parser.add_argument("--force", action="store_true", help="Re-tokenize even if a valid cache exists")
+    parser.add_argument("--prebuilt_folder", type=str, default=None,
+                        help="Use an already-tokenized Drive folder (shards + manifest.json) as-is instead of "
+                             "tokenizing; never tokenizes. Needs --output_dir")
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Local directory to restore --prebuilt_folder into")
     args = parser.parse_args()
+
+    if args.prebuilt_folder:
+        if not args.output_dir:
+            parser.error("--prebuilt_folder requires --output_dir")
+        cfg = load_data_config(args.config)
+        tokenizer_path = args.tokenizer_path or (cfg.get("tokenizer", {}) or {}).get("save_path", "tokenizer_data")
+        credentials = (args.gdrive_credentials if args.gdrive_credentials is not None
+                       else (cfg.get("cache", {}) or {}).get("gdrive_credentials_path", ""))
+        fetch_prebuilt_dataset(tokenizer_path, args.output_dir, args.prebuilt_folder,
+                               credentials or "", force=args.force)
+        return
 
     ensure_tokenized_data_from_config(
         args.config,
