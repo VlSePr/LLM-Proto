@@ -473,3 +473,12 @@ def test_dataset_output_dir_uses_last_folder_name():
     assert dataset_output_dir("data", "gutenberg") == os.path.join("data", "gutenberg")
     with pytest.raises(ValueError):
         dataset_output_dir("data", "/")
+
+
+def test_is_prebuilt_folder_tells_dataset_folder_from_cache_root(tmp_path, tmp_tokenizer_dir, fake_drive):
+    _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/Gutenberg/1224b3924fbb", "guten")
+    assert data.is_prebuilt_folder("LLM/Gutenberg/1224b3924fbb")
+    assert data.is_prebuilt_folder("LLM/Gutenberg/1224b3924fbb/")     # trailing slash as pasted from Drive
+    assert not data.is_prebuilt_folder("LLM/Gutenberg")               # a parent folder has no manifest
+    assert not data.is_prebuilt_folder("LLM/nope")
+    assert not data.is_prebuilt_folder("")
