@@ -890,6 +890,22 @@ def fetch_prebuilt_dataset(
     return output_dir
 
 
+def is_prebuilt_folder(gdrive_folder: str, gdrive_credentials_path: str = "") -> bool:
+    """True when the Drive *gdrive_folder* itself holds a readable ``manifest.json`` (a tokenized dataset).
+
+    Lets a notebook accept a dataset folder in either Drive setting: a cache *root* (the parent of
+    ``tokenized/<fingerprint>/``) has no manifest of its own, a dataset folder does. Any failure to
+    read the folder (missing, unreachable, no API credentials) counts as "no".
+    """
+    if not gdrive_folder:
+        return False
+    try:
+        _download_remote_manifest(gdrive_folder, gdrive_credentials_path)
+    except Exception:
+        return False
+    return True
+
+
 def find_train_shards(data_dir: str) -> list[str]:
     """Sorted list of ``train_NNNN.bin`` shard paths in ``data_dir``."""
     if not os.path.isdir(data_dir):
