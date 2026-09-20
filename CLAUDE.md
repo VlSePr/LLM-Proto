@@ -68,6 +68,10 @@ Notebook outputs are stripped on commit via `.gitattributes` (`nbstripout --inst
   `<folder>/tokenized/<fingerprint>/`, and only then tokenizes into uint16 `train_NNNN.bin` shards +
   `val.bin` (every `val_every`-th document). Changing the tokenizer or any source file changes the
   fingerprint and triggers a rebuild.
+- A dataset tokenized from *other* sources (different fingerprint) is used via `fetch_prebuilt_dataset`
+  (`--prebuilt_folder` / notebook `GDRIVE_DATASET_FOLDER`), not via the fingerprint cache: it takes a Drive
+  folder holding shards + `manifest.json`, trusts that manifest, only checks the tokenizer sha256, and never
+  tokenizes. `dataset_output_dir` gives each dataset its own local dir (downloads/tokenizing wipe their target).
 - `src.train` only calls `create_dataloader(data_dir, ...)` and expects shards to already exist.
 - Train split uses `IterableShardDataset` (streaming, epoch-seeded shard shuffle, per-epoch random window
   offset, shuffle buffer, worker-aware). Its sample order is a **deterministic function of

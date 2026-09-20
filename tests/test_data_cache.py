@@ -11,7 +11,9 @@ from src import data, gdrive
 from src.data import (
     FORMAT_VERSION,
     compute_fingerprint,
+    dataset_output_dir,
     ensure_tokenized_data,
+    fetch_prebuilt_dataset,
     find_train_shards,
     normalize_sources,
     read_manifest,
@@ -367,3 +369,107 @@ def test_download_from_gdrive_leaves_no_partial_file(tmp_path, fake_drive, monke
     assert not (local / "big.bin").exists() and not (local / "big.bin.part").exists()
     with pytest.raises(FileNotFoundError):
         gdrive.download_from_gdrive("nope.bin", "LLM", str(local))
+
+
+# ──────────────────────────────────────────────
+# fetch_prebuilt_dataset: a Drive folder used as-is, trusting its own manifest
+# ──────────────────────────────────────────────
+
+def _upload_dataset(tmp_path, tok, fake_drive, folder, prefix):
+    """Tokenize a corpus with its own sources and copy it to fake Drive under *folder* (no fingerprint layout)."""
+    built = tmp_path / f"built_{prefix}"
+    _run(tok, built, _src(_corpus(tmp_path / f"corpus_{prefix}", prefix=prefix)))
+    remote = fake_drive / folder
+    shutil.copytree(built, remote)
+    return read_manifest(str(built))
+
+
+def test_prebuilt_restores_dataset_from_other_sources_without_tokenizing(
+        tmp_path, tmp_tokenizer_dir, corpus, fake_drive, monkeypatch):
+    manifest = _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/gutenberg", "guten")
+    # Not the fingerprint of the sources the notebook would derive from data.yaml.
+    assert manifest["fingerprint"] != _fp(tmp_tokenizer_dir, _src(corpus))
+    _forbid_tokenize(monkeypatch)
+    out = tmp_path / "data" / "gutenberg"
+    assert fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/gutenberg") == str(out)
+    assert read_manifest(str(out)) == manifest
+    assert validate_local_cache(str(out), manifest["fingerprint"]) == (True, "ok")
+    assert not list(out.glob("*.part"))
+
+
+def test_prebuilt_second_call_is_a_local_hit(tmp_path, tmp_tokenizer_dir, fake_drive, monkeypatch):
+    _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/guten", "guten")
+    out = tmp_path / "out"
+    fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/guten")
+
+    calls = []
+    real = gdrive.download_from_gdrive
+
+    def _spy(filename, *a, **k):
+        calls.append(filename)
+        return real(filename, *a, **k)
+    monkeypatch.setattr(gdrive, "download_from_gdrive", _spy)
+    fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/guten")
+    assert calls == ["manifest.json"]                       # only the manifest is probed
+    fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/guten", force=True)
+    assert len(calls) > 2                                    # force downloads the shards again
+
+
+def test_prebuilt_redownloads_a_damaged_local_copy(tmp_path, tmp_tokenizer_dir, fake_drive):
+    manifest = _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/guten", "guten")
+    out = tmp_path / "out"
+    fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/guten")
+    good = (out / "train_0000.bin").read_bytes()
+    (out / "train_0000.bin").write_bytes(good[:-2])
+    fetch_prebuilt_dataset(tmp_tokenizer_dir, str(out), "LLM/guten")
+    assert (out / "train_0000.bin").read_bytes() == good
+    assert validate_local_cache(str(out), manifest["fingerprint"]) == (True, "ok")
+
+
+def test_prebuilt_missing_folder_or_manifest_raises(tmp_path, tmp_tokenizer_dir, fake_drive):
+    with pytest.raises(FileNotFoundError, match="manifest.json"):
+        fetch_prebuilt_dataset(tmp_tokenizer_dir, str(tmp_path / "out"), "LLM/nope")
+    (fake_drive / "LLM" / "bare").mkdir(parents=True)
+    (fake_drive / "LLM" / "bare" / "train_0000.bin").write_bytes(b"\x00\x00")
+    with pytest.raises(FileNotFoundError, match="manifest.json"):
+        fetch_prebuilt_dataset(tmp_tokenizer_dir, str(tmp_path / "out"), "LLM/bare")
+    assert not (tmp_path / "out").exists()
+
+
+def test_prebuilt_rejects_a_different_tokenizer(tmp_path, tmp_tokenizer_dir, fake_drive):
+    _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/guten", "guten")
+    other = tmp_path / "tok2"
+    shutil.copytree(tmp_tokenizer_dir, other)
+    with open(other / "tokenizer.json", "a") as f:
+        f.write("\n")
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="different tokenizer"):
+        fetch_prebuilt_dataset(str(other), str(out), "LLM/guten")
+    assert not out.exists()
+
+
+def test_prebuilt_truncated_remote_shard_raises(tmp_path, tmp_tokenizer_dir, fake_drive):
+    _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/guten", "guten")
+    shard = fake_drive / "LLM" / "guten" / "train_0000.bin"
+    shard.write_bytes(shard.read_bytes()[:-2])
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        fetch_prebuilt_dataset(tmp_tokenizer_dir, str(tmp_path / "out"), "LLM/guten")
+
+
+def test_prebuilt_datasets_in_separate_dirs_coexist(tmp_path, tmp_tokenizer_dir, fake_drive):
+    ma = _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/guten", "guten")
+    mb = _upload_dataset(tmp_path, tmp_tokenizer_dir, fake_drive, "LLM/wiki", "wiki")
+    base = str(tmp_path / "data")
+    a = fetch_prebuilt_dataset(tmp_tokenizer_dir, dataset_output_dir(base, "LLM/guten"), "LLM/guten")
+    b = fetch_prebuilt_dataset(tmp_tokenizer_dir, dataset_output_dir(base, "LLM/wiki"), "LLM/wiki")
+    assert a != b
+    assert validate_local_cache(a, ma["fingerprint"]) == (True, "ok")
+    assert validate_local_cache(b, mb["fingerprint"]) == (True, "ok")
+
+
+def test_dataset_output_dir_uses_last_folder_name():
+    assert dataset_output_dir("data", "LLM/gutenberg") == os.path.join("data", "gutenberg")
+    assert dataset_output_dir("data", "LLM/gutenberg/") == os.path.join("data", "gutenberg")
+    assert dataset_output_dir("data", "gutenberg") == os.path.join("data", "gutenberg")
+    with pytest.raises(ValueError):
+        dataset_output_dir("data", "/")

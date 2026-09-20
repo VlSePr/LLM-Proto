@@ -544,6 +544,17 @@ The `tokenize_and_save()` function:
 `--force` (CLI) or `FORCE_TOKENIZE = True` (notebook) skips both lookups. Each fingerprint is a separate
 Drive folder, so old ones accumulate until deleted by hand.
 
+**Pre-tokenized folders.** The lookup above is by *expected* fingerprint, so a dataset built from different
+sources (different fingerprint) or uploaded outside the `tokenized/<fp>/` layout is never found — and an empty
+source list falls back to the default HuggingFace dataset and tokenizes it. `fetch_prebuilt_dataset()` is the
+explicit alternative: given a Drive folder holding `train_NNNN.bin`, `val.bin` and `manifest.json`, it reads
+that manifest, checks `format_version` and that `manifest.tokenizer.sha256` equals the sha256 of the local
+`tokenizer.json` (otherwise `ValueError` — the token ids would be meaningless), and downloads the listed files
+(size-checked, manifest last), or reuses an identical local copy. It never tokenizes; a missing manifest is a
+`FileNotFoundError`. `dataset_output_dir(base, folder)` gives each dataset its own local directory, since the
+download and `tokenize_and_save` both clear their target. CLI: `--prebuilt_folder` + `--output_dir`; notebook:
+`GDRIVE_DATASET_FOLDER`.
+
 ### 6.3 Memory-Mapped Dataset
 
 ```python
