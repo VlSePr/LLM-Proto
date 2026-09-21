@@ -136,12 +136,26 @@ Notebook outputs are stripped on commit via `.gitattributes` (`nbstripout --inst
 Two modes chosen at runtime: on Colab, `gdrive_folder_id` is a folder *name* under `MyDrive` on the
 mounted drive; elsewhere it is a real Drive folder *ID* used through the REST API with a service-account
 JSON. All Drive calls in the data cache and checkpoint paths are best-effort and wrapped in `try/except`.
+`upload_to_gdrive` / `download_from_gdrive` take `progress=True|False|callable` (`src/progress.py`): `True` draws a
+`tqdm.auto` byte bar only for files >= 10 MB, a callable receives the number of *new* bytes so a caller can drive its
+own overall bar (`data._download_folder` / `_upload_cache_to_gdrive` do). Colab copies go through `copy_with_progress`
+(chunked; `shutil.copy2` can't report bytes) and API transfers use `next_chunk()` loops with an explicit chunk size, so
+every Drive byte reports progress from these two functions. Local `torch.save` can't; `save_checkpoint` prints the size.
 
 ### Notebook helpers
 Everything a notebook used to inline now has a home: `utils.default_num_workers` (0 on Windows / in Jupyter),
 `utils.resolve_checkpoint_path` (download-if-missing), `tokenizer.ensure_tokenizer` (local → Drive → train),
 `data.resolve_sources` / `ensure_tokenized_data_from_config`, `gdrive.describe_drive_setup`,
 `generate.ChatSession` + `chat_widget`, `visualize.plot_training_curves` / `plot_expert_load`.
+
+`LLM_proto.ipynb` is laid out as Part A Setup (install-if-missing, **one** config cell holding every setting,
+environment + Drive) → B Prepare (tokenizer, data, model/dataloader check) → C Train (`report.run_summary` plan +
+LR preview, `train`, `report.training_summary`) → D Analyse (step 9 loads `latest.pt` once; curves come from
+`utils.load_metrics_history` so they survive a kernel restart) → E Outputs. Keep it that way: no literal setting
+outside the config cell. Outputs go to `<checkpoint_dir>/../outputs/` (git-ignored): `outputs.save_figure` for PNGs,
+`visualize.plot_embedding_space_3d(..., out_path=...)` for the self-contained Plotly HTML, `outputs.publish_output`
+to copy a file to `<drive run folder>/outputs/` and start a Colab browser download, `outputs.zip_outputs` for the bundle.
+`report.py` returns strings (`run_summary`, `dataset_summary`, `training_summary`) so they stay testable.
 
 ### Tests (`tests/`)
 `conftest.py` provides `tiny_cfg` (vocab 512, dim 64, 2 layers), `write_shards`/`tmp_data` (random

@@ -4,6 +4,7 @@ data/*
 data/custom/**/*
 !data/custom/**/.gitkeep
 checkpoints/
+outputs/
 logs/
 *.pt
 *.pth

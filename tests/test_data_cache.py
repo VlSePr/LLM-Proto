@@ -358,11 +358,11 @@ def test_download_from_gdrive_leaves_no_partial_file(tmp_path, fake_drive, monke
     remote.mkdir(parents=True)
     (remote / "big.bin").write_bytes(b"x" * 100)
 
-    def _fail(src, dst):
+    def _fail(src, dst, *args, **kwargs):
         with open(dst, "wb") as f:
             f.write(b"xx")
         raise OSError("disconnected")
-    monkeypatch.setattr(shutil, "copy2", _fail)
+    monkeypatch.setattr(gdrive, "copy_with_progress", _fail)
     local = tmp_path / "local"
     with pytest.raises(OSError):
         gdrive.download_from_gdrive("big.bin", "LLM", str(local))

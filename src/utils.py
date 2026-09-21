@@ -17,6 +17,7 @@ import numpy as np
 import torch
 
 from .config import ModelConfig, TrainConfig, config_from_dict
+from .progress import human_size
 
 
 def sha256_file(path: str, chunk: int = 1 << 20) -> str:
@@ -315,6 +316,8 @@ def save_checkpoint(
     tmp_path = path + ".tmp"
     torch.save(checkpoint, tmp_path)
     os.replace(tmp_path, path)  # atomic: never leave a half-written step_N.pt behind
+    # torch.save cannot report bytes mid-write, so state the size afterwards (Drive uploads below get bars).
+    print(f"  -> Saved {os.path.basename(path)} ({human_size(os.path.getsize(path))})")
 
     # "latest.pt" is a convenience alias: always points to the most recent checkpoint.
     # This way, resume="latest" always works without knowing the exact step number.
@@ -382,6 +385,32 @@ def save_metrics_history(
     os.replace(tmp_path, path)
     upload_run_artifact(path, gdrive_folder_id, gdrive_credentials_path)
     return path
+
+
+def load_metrics_history(
+    checkpoint_dir: str,
+    *,
+    gdrive_folder_id: str = "",
+    gdrive_credentials_path: str = "",
+) -> list[dict[str, Any]]:
+    """Read ``<checkpoint_dir>/metrics_history.json`` (fetched from Drive when missing locally).
+
+    Lets the analysis cells draw the loss curves after a kernel restart or on a fresh machine,
+    without the ``history`` list ``train()`` returned. Returns ``[]`` when no history exists.
+    """
+    path = os.path.join(checkpoint_dir, "metrics_history.json")
+    if not os.path.exists(path) and gdrive_folder_id:
+        try:
+            from .gdrive import download_from_gdrive
+            download_from_gdrive("metrics_history.json", gdrive_folder_id, checkpoint_dir, gdrive_credentials_path)
+        except Exception as e:
+            print(f"  ! Could not fetch metrics_history.json from Google Drive: {e}")
+    try:
+        with open(path) as f:
+            history = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return history if isinstance(history, list) else []
 
 
 def cleanup_checkpoints(checkpoint_dir: str, keep_n: int):

@@ -3,6 +3,8 @@ Visualization of model internals and training metrics.
 Generates matplotlib figures logged to Wandb.
 """
 
+import os
+import string
 import sys
 
 import matplotlib
@@ -111,50 +113,170 @@ def plot_attention_heatmap(
     return fig
 
 
+EMBEDDING_METHODS = ("pca", "tsne")
+
+
+def _select_token_ids(model: TransformerLM, tokenizer: LLMTokenizer, n_tokens: int, selection: str) -> list[int]:
+    """Token ids to plot.
+
+    ``"merged"`` (default) skips the special tokens *and* the 256 single-character byte-level alphabet
+    tokens that the BPE trainer puts first, so the plot shows learned sub-words (ids are in merge order,
+    i.e. roughly most-frequent first). ``"all"`` takes the first ids after the special tokens.
+    """
+    if selection not in ("merged", "all"):
+        raise ValueError(f"selection must be 'merged' or 'all', got {selection!r}")
+    limit = min(model.tok_emb.weight.shape[0], tokenizer.vocab_size)
+    special = tokenizer.special_ids()
+    ids: list[int] = []
+    for i in range(limit):
+        if i in special:
+            continue
+        token = tokenizer.id_to_token(i)
+        if token is None or (selection == "merged" and len(token) <= 1):
+            continue
+        ids.append(i)
+        if len(ids) >= n_tokens:
+            break
+    if len(ids) < 4:
+        raise ValueError(f"need at least 4 tokens to project embeddings, found {len(ids)}")
+    return ids
+
+
+def _embedding_subset(model: TransformerLM, tokenizer: LLMTokenizer, n_tokens: int, selection: str):
+    """``(vectors, ids, raw_tokens)`` for the selected tokens of ``model.tok_emb``."""
+    model.eval()
+    ids = _select_token_ids(model, tokenizer, n_tokens, selection)
+    weights = model.tok_emb.weight.detach().float().cpu().numpy()
+    raw = [tokenizer.id_to_token(i) or f"[{i}]" for i in ids]
+    return weights[ids], ids, raw
+
+
+def _project_embeddings(vectors: np.ndarray, method: str, n_components: int):
+    """Reduce *vectors* to *n_components* dims; returns ``(coords, axis_titles)``."""
+    if method == "pca":
+        from sklearn.decomposition import PCA
+        reducer = PCA(n_components=n_components, random_state=42)
+        coords = reducer.fit_transform(vectors)
+        titles = [f"PC{i + 1} ({ratio:.0%})" for i, ratio in enumerate(reducer.explained_variance_ratio_)]
+        return coords, titles
+    if method == "tsne":
+        from sklearn.manifold import TSNE
+        # perplexity ~ "effective number of neighbors"; must be < n_samples, 30 is the usual sweet spot.
+        reducer = TSNE(n_components=n_components, random_state=42, perplexity=min(30, len(vectors) - 1))
+        return reducer.fit_transform(vectors), [f"t-SNE {i + 1}" for i in range(n_components)]
+    raise ValueError(f"method must be one of {EMBEDDING_METHODS}, got {method!r}")
+
+
+def _display_token(raw: str) -> str:
+    """Make a byte-level BPE token readable: ``'Ġthe'`` -> ``'␣the'``, newline marker -> ``'⏎'``."""
+    return raw.replace("Ġ", "␣").replace("Ċ", "⏎")
+
+
+def _token_category(raw: str) -> str:
+    """Coarse class of a token, used to colour the 3D plot."""
+    spaced = raw.startswith("Ġ")
+    body = raw[1:] if spaced else raw
+    if body.isalpha():
+        return "word (with leading space)" if spaced else "word piece"
+    if body.isdigit():
+        return "digits"
+    if body and all(c in string.punctuation for c in body):
+        return "punctuation"
+    return "other"
+
+
 def plot_embedding_space(
     model: TransformerLM,
     tokenizer: LLMTokenizer,
     n_tokens: int = 500,
     method: str = "tsne",
+    selection: str = "merged",
 ) -> plt.Figure:
     """
-    Visualize token embedding space using t-SNE (or UMAP).
+    Visualize token embedding space in 2D (``method`` = ``"tsne"`` or ``"pca"``).
     Diagnostic purpose: well-trained embeddings cluster semantically similar
     tokens (e.g., digits together, punctuation together). Uniform blobs
-    suggest undertrained embeddings.
+    suggest undertrained embeddings. See ``plot_embedding_space_3d`` for the
+    interactive, downloadable version.
     """
-    model.eval()
-    embeddings = model.tok_emb.weight.detach().cpu().numpy()
-
-    # Select a subset of tokens (skip special tokens, take first n_tokens regular tokens)
-    n_tokens = min(n_tokens, embeddings.shape[0])
-    indices = list(range(5, 5 + n_tokens))  # Skip 5 special tokens
-    subset = embeddings[indices]
-    labels = [tokenizer.id_to_token(i) or f"[{i}]" for i in indices]
-
-    if method == "tsne":
-        from sklearn.manifold import TSNE
-        # perplexity ≈ "effective number of neighbors"; must be < n_samples.
-        # 30 is the default/sweet spot; we clamp to n_tokens-1 for small datasets.
-        reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, n_tokens - 1))
-    else:
-        from sklearn.manifold import TSNE
-        reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, n_tokens - 1))
-
-    coords = reducer.fit_transform(subset)
+    subset, _ids, raw = _embedding_subset(model, tokenizer, n_tokens, selection)
+    coords, axes = _project_embeddings(subset, method, 2)
+    labels = [_display_token(r) for r in raw]
 
     fig, ax = plt.subplots(figsize=(12, 10))
     ax.scatter(coords[:, 0], coords[:, 1], alpha=0.6, s=10)
 
     # Label some points
-    step = max(1, n_tokens // 50)
+    step = max(1, len(labels) // 50)
     for i in range(0, len(labels), step):
         ax.annotate(labels[i], (coords[i, 0], coords[i, 1]), fontsize=5, alpha=0.7)
 
-    ax.set_title(f"Token Embedding Space ({method.upper()}, {n_tokens} tokens)")
-    ax.set_xlabel("Dim 1")
-    ax.set_ylabel("Dim 2")
+    ax.set_title(f"Token Embedding Space ({method.upper()}, {len(labels)} tokens)")
+    ax.set_xlabel(axes[0])
+    ax.set_ylabel(axes[1])
     plt.tight_layout()
+    return fig
+
+
+def plot_embedding_space_3d(
+    model: TransformerLM,
+    tokenizer: LLMTokenizer,
+    n_tokens: int = 1000,
+    method: str = "pca",
+    selection: str = "merged",
+    out_path: str | None = None,
+):
+    """
+    Interactive 3D token-embedding scatter (Plotly): rotate, zoom, hover to read a token,
+    click a legend entry to hide a token class.
+
+    ``method`` is ``"pca"`` (fast, deterministic; axis titles show explained variance) or
+    ``"tsne"`` (slower, better local clusters). ``selection`` is ``"merged"`` (learned sub-words,
+    default) or ``"all"`` (see ``_select_token_ids``). With ``out_path`` the figure is also written
+    as ONE self-contained ``.html`` (plotly.js embedded, ~4 MB) that opens offline in any browser.
+    Returns the ``plotly.graph_objects.Figure``.
+    """
+    try:
+        import plotly.graph_objects as go
+    except ImportError as e:  # pragma: no cover - plotly is in requirements.txt
+        raise ImportError("plot_embedding_space_3d needs plotly: pip install plotly") from e
+
+    subset, ids, raw = _embedding_subset(model, tokenizer, n_tokens, selection)
+    coords, axes = _project_embeddings(subset, method, 3)
+    labels = [_display_token(r) for r in raw]
+    categories = [_token_category(r) for r in raw]
+
+    fig = go.Figure()
+    for category in sorted(set(categories)):
+        idx = [i for i, c in enumerate(categories) if c == category]
+        fig.add_trace(go.Scatter3d(
+            x=coords[idx, 0], y=coords[idx, 1], z=coords[idx, 2],
+            mode="markers", name=category,
+            marker={"size": 3, "opacity": 0.8},
+            text=[labels[i] for i in idx],
+            customdata=[ids[i] for i in idx],
+            hovertemplate="<b>%{text}</b><br>token id %{customdata}<extra>" + category + "</extra>",
+        ))
+    # A sparse set of always-visible labels; every token stays readable on hover.
+    step = max(1, len(ids) // 40)
+    shown = list(range(0, len(ids), step))
+    fig.add_trace(go.Scatter3d(
+        x=coords[shown, 0], y=coords[shown, 1], z=coords[shown, 2],
+        mode="text", text=[labels[i] for i in shown], textfont={"size": 9},
+        hoverinfo="skip", showlegend=False,
+    ))
+    fig.update_layout(
+        title=f"Token embedding space ({method.upper()}, {len(ids)} tokens)",
+        scene={"xaxis_title": axes[0], "yaxis_title": axes[1], "zaxis_title": axes[2]},
+        legend={"itemsizing": "constant"},
+        margin={"l": 0, "r": 0, "t": 50, "b": 0},
+        height=760,
+    )
+
+    if out_path:
+        out_dir = os.path.dirname(os.path.abspath(out_path))
+        os.makedirs(out_dir, exist_ok=True)
+        fig.write_html(out_path, include_plotlyjs=True, full_html=True)
     return fig
 
 
