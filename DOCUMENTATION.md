@@ -813,11 +813,14 @@ Six visualization types for understanding model internals, all logged to Wandb:
 
 Shows what each token "attends to" — a 2D heatmap where position (i, j) shows how much token i attends to token j. The causal mask makes this lower-triangular (tokens can only attend to past tokens).
 
-### 10.2 Embedding Space (t-SNE)
+### 10.2 Embedding Space (2D and interactive 3D)
 
-`plot_embedding_space(model, tokenizer, n_tokens=500)`
+`plot_embedding_space(model, tokenizer, n_tokens=500, method="tsne")` — a static matplotlib 2D scatter.
+`plot_embedding_space_3d(model, tokenizer, n_tokens=1000, method="pca", out_path=...)` — an interactive Plotly 3D scatter.
 
-Projects the 512+ dimensional token embeddings into 2D using t-SNE. Reveals clustering structure — semantically similar tokens should cluster together after training.
+Both project the token embeddings down with `method` = `"pca"` (fast, deterministic; the 3D axis titles show explained variance) or `"tsne"` (slower, better local clusters); any other value raises `ValueError`. By default only *learned sub-words* are plotted (`selection="merged"`): the special tokens and the 256 single-character byte-alphabet tokens the BPE trainer puts first are skipped, since they carry no meaning yet. Reveals clustering structure — digits, punctuation and common word pieces should cluster together after training.
+
+The 3D figure is coloured by token class, shows the token text and id on hover, and with `out_path` is written as **one self-contained `.html`** (plotly.js embedded, a few MB) that opens offline in any browser. The notebook saves it to `outputs/`, copies it to the run's Drive folder and, on Colab, starts a browser download (`src/outputs.py: publish_output`).
 
 ### 10.3 Weight Distributions
 
@@ -1112,10 +1115,11 @@ Step 6: Generate text
 | `lm-eval` | ≥0.4.0 | LM evaluation harness (benchmarks) |
 | `matplotlib` | ≥3.8.0 | Visualization plots |
 | `seaborn` | ≥0.13.0 | Heatmap styling |
-| `scikit-learn` | ≥1.3.0 | t-SNE for embedding visualization |
+| `scikit-learn` | ≥1.3.0 | PCA / t-SNE for embedding visualization |
+| `plotly` | ≥5.18.0 | Interactive 3D embedding explorer (downloadable HTML) |
 | `numpy` | ≥1.24.0 | Array operations, memory mapping |
 | `pyyaml` | ≥6.0 | YAML config parsing |
-| `tqdm` | ≥4.66.0 | Progress bars |
+| `tqdm` | ≥4.66.0 | Progress bars (`tqdm.auto`: widgets in notebooks, text in terminals) |
 | `google-api-python-client` | ≥2.100.0 | Google Drive API |
 | `google-auth` | ≥2.23.0 | Google authentication |
 

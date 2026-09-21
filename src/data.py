@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import yaml
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from .utils import sha256_file
 
@@ -529,7 +529,9 @@ def tokenize_and_save(
     # in parallel — a single-document-at-a-time `encode()` loop never leaves Python,
     # so it can only ever use one core.
     TOKENIZE_BATCH_SIZE = 64
-    progress = tqdm(desc="Tokenizing", unit="doc")
+    # With a token budget the bar has a real total (tokens); otherwise it can only count documents.
+    progress = tqdm(total=max_tokens or None, desc="Tokenizing",
+                    unit="tok" if max_tokens else "doc", unit_scale=bool(max_tokens))
     stop = False
     indexed_texts = enumerate(text_iter)
     while not stop:
@@ -570,7 +572,7 @@ def tokenize_and_save(
             if max_tokens and token_count >= max_tokens:
                 stop = True
                 break
-        progress.update(len(batch))
+        progress.update(token_count - progress.n if max_tokens else len(batch))
     progress.close()
 
     # Flush remaining train tokens
@@ -667,12 +669,13 @@ def _download_folder(folder: str, remote: dict[str, Any], output_dir: str,
               unit_divisor=1024, desc="[data cache] Downloading from Google Drive") as pbar:
         for entry in files:
             pbar.set_postfix_str(entry["name"])
-            path = gdrive.download_from_gdrive(entry["name"], folder, output_dir, credentials_path)
+            # The overall bar is fed by the transfer itself, so it moves *within* a large shard.
+            path = gdrive.download_from_gdrive(entry["name"], folder, output_dir, credentials_path,
+                                               progress=pbar.update)
             actual = os.path.getsize(path)
             if actual != entry["bytes"]:
                 raise RuntimeError(f"size mismatch after download: {entry['name']} ({actual} != {entry['bytes']})")
             total_bytes += actual
-            pbar.update(actual)
     write_manifest(output_dir, remote)
     print(f"[data cache] Downloaded {len(files)} file(s), {total_bytes / 1e6:.1f} MB from Google Drive")
     return remote
@@ -683,9 +686,13 @@ def _upload_cache_to_gdrive(manifest: dict[str, Any], output_dir: str, root_fold
     """Upload shards then the manifest (last) to ``<root>/tokenized/<fp12>``."""
     from . import gdrive
     folder = _remote_cache_folder(manifest["fingerprint"], root_folder_id, credentials_path, create=True)
-    for entry in manifest["files"]:
-        gdrive.upload_to_gdrive(os.path.join(output_dir, entry["name"]), folder, credentials_path)
-    gdrive.upload_to_gdrive(os.path.join(output_dir, MANIFEST_NAME), folder, credentials_path)
+    with tqdm(total=sum(entry["bytes"] for entry in manifest["files"]), unit="B", unit_scale=True,
+              unit_divisor=1024, desc="[data cache] Uploading to Google Drive") as pbar:
+        for entry in manifest["files"]:
+            pbar.set_postfix_str(entry["name"])
+            gdrive.upload_to_gdrive(os.path.join(output_dir, entry["name"]), folder, credentials_path,
+                                    progress=pbar.update)
+    gdrive.upload_to_gdrive(os.path.join(output_dir, MANIFEST_NAME), folder, credentials_path, progress=False)
     print(f"[data cache] Uploaded {len(manifest['files'])} file(s) to Google Drive "
           f"({GDRIVE_CACHE_SUBDIR}/{manifest['fingerprint'][:12]})")
 

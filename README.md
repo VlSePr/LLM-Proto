@@ -168,7 +168,7 @@ LLM-Proto/
 │   └── custom/              # Your own txt/ and jsonl/ data
 ├── tokenizer_data/          # Trained tokenizer output
 ├── checkpoints/             # Model checkpoints (generated)
-├── LLM_proto.ipynb          # Training notebook (Colab-ready) — thin driver over src/
+├── LLM_proto.ipynb          # Training notebook (Colab-ready): Setup → Prepare → Train → Analyse → Outputs; one config cell
 ├── LLM-expert.ipynb         # Mixture-of-Experts fine-tuning notebook — thin driver over src/
 ├── LLM-inference.ipynb      # Inference / chat notebook — thin driver over src/
 └── requirements.txt         # Python dependencies

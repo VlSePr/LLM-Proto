@@ -7,6 +7,7 @@ Optimized for English text with byte-fallback.
 import os
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from tqdm.auto import tqdm
 
 # Special tokens used by the model:
 # - bos/eos: mark sequence boundaries (critical for generation to know when to stop)
@@ -190,12 +191,15 @@ def train_tokenizer_from_sources(
 
     def text_iterator():
         count = 0
-        for text in iter_texts_from_sources(sources, hf_token=hf_token):
-            if count >= num_samples:
-                break
-            if text and len(text) > min_chars:
-                yield text
-                count += 1
+        # The HF stream is the slow part (network); a bar over the sample budget shows it moving.
+        with tqdm(total=num_samples, desc="Collecting tokenizer samples", unit="doc") as bar:
+            for text in iter_texts_from_sources(sources, hf_token=hf_token):
+                if count >= num_samples:
+                    break
+                if text and len(text) > min_chars:
+                    yield text
+                    count += 1
+                    bar.update(1)
         print(f"  Used {count:,} text samples for tokenizer training")
 
     print(f"Training BPE tokenizer (vocab_size={vocab_size:,}, samples<={num_samples:,}, "

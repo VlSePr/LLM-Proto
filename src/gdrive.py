@@ -19,9 +19,11 @@ Colab, a folder ID in API mode).
 
 import glob
 import os
-import shutil
 import sys
+from contextlib import ExitStack
 from datetime import datetime, timezone
+
+from .progress import CHUNK_BYTES, ProgressArg, copy_with_progress, file_size, transfer_progress
 
 _COLAB_MOUNT = "/content/drive"
 
@@ -215,21 +217,28 @@ def upload_to_gdrive(
     local_path: str,
     folder_id: str,
     credentials_path: str = "",
+    progress: ProgressArg = True,
 ) -> str:
     """
     Upload a local file to Google Drive.
+
+    ``progress`` is ``True`` (byte bar for files >= 10 MB), ``False``, or an
+    ``on_bytes(n)`` callback (see ``src.progress``).
 
     Returns:
         Colab — the destination path on the mounted Drive.
         Non-Colab — the Google Drive file ID.
     """
     filename = os.path.basename(local_path)
+    total = file_size(local_path)
+    desc = f"Uploading {filename} to Drive"
 
     # ── Colab: filesystem copy ──
     if _is_colab():
         dest_dir = _colab_folder(folder_id)
         dest = os.path.join(dest_dir, filename)
-        shutil.copy2(local_path, dest)
+        with transfer_progress(progress, total, desc) as bump:
+            copy_with_progress(local_path, dest, bump)
         return dest
 
     # ── API mode ──
@@ -240,21 +249,25 @@ def upload_to_gdrive(
     # resumable=True enables chunked uploads — if the connection drops mid-transfer,
     # the upload can resume from the last successfully sent chunk instead of restarting.
     # This is essential for large checkpoint files (100 MB+) over unreliable connections.
-    media = MediaFileUpload(local_path, resumable=True)
+    # An explicit chunk size lets next_chunk() report progress every few MB.
+    media = MediaFileUpload(local_path, resumable=True, chunksize=CHUNK_BYTES)
 
     if existing_id:
-        result = (
-            service.files()
-            .update(fileId=existing_id, media_body=media)
-            .execute()
-        )
+        request = service.files().update(fileId=existing_id, media_body=media)
     else:
         metadata = {"name": filename, "parents": [folder_id]}
-        result = (
-            service.files()
-            .create(body=metadata, media_body=media, fields="id")
-            .execute()
-        )
+        request = service.files().create(body=metadata, media_body=media, fields="id")
+
+    with transfer_progress(progress, total, desc) as bump:
+        sent = 0
+        result = None
+        while result is None:
+            status, result = request.next_chunk()
+            if status is not None:
+                position = int(status.resumable_progress)
+                bump(position - sent)
+                sent = position
+        bump(max(0, total - sent))
     return result["id"]
 
 
@@ -336,6 +349,7 @@ def download_from_gdrive(
     folder_id: str,
     local_dir: str,
     credentials_path: str = "",
+    progress: ProgressArg = True,
 ) -> str:
     """
     Download a file from Google Drive to *local_dir*.
@@ -344,9 +358,14 @@ def download_from_gdrive(
     when complete, so an interrupted download never leaves a truncated file
     that looks like the real thing.
 
+    ``progress`` is ``True`` (byte bar for files >= 10 MB), ``False``, or an
+    ``on_bytes(n)`` callback (see ``src.progress``).
+
     Raises:
         FileNotFoundError: If the file doesn't exist on Drive.
     """
+    desc = f"Downloading {filename} from Drive"
+
     # ── Colab: filesystem copy ──
     if _is_colab():
         src = os.path.join(_colab_folder(folder_id, create=False), filename)
@@ -358,7 +377,8 @@ def download_from_gdrive(
         dest = os.path.join(local_dir, filename)
         part = dest + ".part"
         try:
-            shutil.copy2(src, part)
+            with transfer_progress(progress, file_size(src), desc) as bump:
+                copy_with_progress(src, part, bump)
             os.replace(part, dest)
         except BaseException:
             if os.path.exists(part):
@@ -382,11 +402,21 @@ def download_from_gdrive(
 
     request = service.files().get_media(fileId=file_id)
     try:
-        with open(part, "wb") as fh:
-            downloader = MediaIoBaseDownload(fh, request)
+        # Total size is only known after the first chunk, so the bar is opened lazily.
+        with open(part, "wb") as fh, ExitStack() as stack:
+            downloader = MediaIoBaseDownload(fh, request, chunksize=CHUNK_BYTES)
             done = False
+            received = 0
+            bump = None
             while not done:
-                _, done = downloader.next_chunk()
+                status, done = downloader.next_chunk()
+                if status is None:
+                    continue
+                if bump is None:
+                    bump = stack.enter_context(transfer_progress(progress, int(status.total_size or 0), desc))
+                position = int(status.resumable_progress)
+                bump(position - received)
+                received = position
         os.replace(part, local_path)
     except BaseException:
         if os.path.exists(part):
