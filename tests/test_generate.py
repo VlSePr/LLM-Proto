@@ -4,10 +4,13 @@ import torch
 from src.config import TrainConfig
 from src.generate import (
     ChatSession,
+    build_gradio_chat_demo,
     chat_widget,
     clean_generated_text,
     generate_ids,
     generate_text,
+    gradio_chat_clear,
+    gradio_chat_send,
     load_model_for_inference,
 )
 from src.model import TransformerLM
@@ -79,3 +82,61 @@ def test_chat_widget_drives_session(tiny_cfg, tokenizer, seed):
     assert len(session.turns) == 1 and textarea.value == ""
     clear_btn.click()
     assert session.turns == [] and session.history == []
+
+
+def test_gradio_chat_send_isolates_visitors(tiny_cfg, tokenizer, seed):
+    pytest.importorskip("gradio")
+    model = TransformerLM(tiny_cfg).eval()
+
+    session_a, history_a, cleared_a = gradio_chat_send(
+        None, "hello from visitor A", [], model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+    session_b, history_b, cleared_b = gradio_chat_send(
+        None, "hello from visitor B", [], model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+
+    assert session_a is not session_b
+    assert cleared_a == "" and cleared_b == ""
+    assert session_a.turns == [("hello from visitor A", session_a.turns[0][1])]
+    assert session_b.turns == [("hello from visitor B", session_b.turns[0][1])]
+    assert history_a[0] == {"role": "user", "content": "hello from visitor A"}
+    assert history_b[0] == {"role": "user", "content": "hello from visitor B"}
+    # Mutating A's history must never leak into B's -- independent conversation state per visitor.
+    session_a.history.append(999)
+    assert 999 not in session_b.history
+
+
+def test_gradio_chat_send_accumulates_within_one_session(tiny_cfg, tokenizer, seed):
+    pytest.importorskip("gradio")
+    model = TransformerLM(tiny_cfg).eval()
+
+    session, history, cleared = gradio_chat_send(None, "first turn", [], model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+    assert cleared == "" and len(history) == 2
+    assert history[0] == {"role": "user", "content": "first turn"}
+    assert history[1]["role"] == "assistant"
+
+    session, history, cleared = gradio_chat_send(
+        session, "second turn", history, model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+    assert len(history) == 4 and len(session.turns) == 2
+
+
+def test_gradio_chat_clear_resets_only_that_session(tiny_cfg, tokenizer, seed):
+    pytest.importorskip("gradio")
+    model = TransformerLM(tiny_cfg).eval()
+
+    session_a, _, _ = gradio_chat_send(None, "hi from A", [], model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+    session_b, _, _ = gradio_chat_send(None, "hi from B", [], model, tokenizer, 8, 0.0, 50, 0.9, 1.0)
+
+    cleared_state, cleared_history = gradio_chat_clear(session_a)
+    assert cleared_state is session_a
+    assert cleared_state.turns == [] and cleared_state.history == []
+    assert cleared_history == []
+    assert session_b.turns != [] and session_b.history != []   # untouched
+
+
+def test_build_gradio_chat_demo_returns_blocks_with_queue(tiny_cfg, tokenizer):
+    gr = pytest.importorskip("gradio")
+    model = TransformerLM(tiny_cfg).eval()
+
+    demo = build_gradio_chat_demo(model, tokenizer, concurrency_limit=2, queue_max_size=200)
+    assert isinstance(demo, gr.Blocks)
+    assert demo._queue.max_size == 200
+    demo.close()

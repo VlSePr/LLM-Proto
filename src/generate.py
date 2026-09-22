@@ -222,6 +222,135 @@ def chat_widget(session: ChatSession, *, title: str = "LLM-Proto Chat"):
     ])
 
 
+def get_or_create_chat_session(
+    session_state: "ChatSession | None",
+    model: TransformerLM,
+    tokenizer: LLMTokenizer,
+    *,
+    max_new_tokens: int = 256,
+    temperature: float = 0.8,
+    top_k: int = 50,
+    top_p: float = 0.9,
+    repetition_penalty: float = 1.0,
+) -> ChatSession:
+    """Return ``session_state`` unchanged if already a session, else build one bound to ``model``/``tokenizer``.
+
+    This is the lazy per-visitor init step for the Gradio UI: each browser session's ``gr.State`` starts as
+    ``None`` and only becomes a real ``ChatSession`` on that visitor's first message.
+    """
+    if session_state is None:
+        return ChatSession(
+            model, tokenizer, max_new_tokens=max_new_tokens, temperature=temperature,
+            top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty,
+        )
+    return session_state
+
+
+def gradio_chat_send(
+    session_state: "ChatSession | None",
+    message: str,
+    chat_history: list[dict] | None,
+    model: TransformerLM,
+    tokenizer: LLMTokenizer,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    top_p: float,
+    repetition_penalty: float,
+) -> tuple[ChatSession, list[dict], str]:
+    """One visitor's chat turn: lazily create their session, apply the current slider values, generate a reply,
+    and append it to their ``chat_history`` (``gr.Chatbot(type="messages")`` format).
+
+    Plain function with no Gradio event plumbing, so it can be called directly (e.g. with
+    ``session_state=None`` to simulate a new visitor) both by ``build_gradio_chat_demo`` and by tests.
+    Returns ``(updated_session_state, updated_chat_history, "")`` — the last value clears the textbox.
+    """
+    chat_history = list(chat_history or [])
+    message = (message or "").strip()
+    if not message:
+        return session_state, chat_history, ""
+
+    session = get_or_create_chat_session(
+        session_state, model, tokenizer, max_new_tokens=max_new_tokens, temperature=temperature,
+        top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty,
+    )
+    session.max_new_tokens, session.temperature = max_new_tokens, temperature
+    session.top_k, session.top_p, session.repetition_penalty = top_k, top_p, repetition_penalty
+
+    response = session.reply(message)
+    chat_history = chat_history + [
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": response},
+    ]
+    return session, chat_history, ""
+
+
+def gradio_chat_clear(session_state: "ChatSession | None") -> tuple["ChatSession | None", list]:
+    """Reset one visitor's conversation only. Safe to call before that visitor ever sent a message."""
+    if session_state is not None:
+        session_state.clear()
+    return session_state, []
+
+
+def build_gradio_chat_demo(
+    model: TransformerLM,
+    tokenizer: LLMTokenizer,
+    *,
+    title: str = "LLM-Proto Chat",
+    max_new_tokens: int = 256,
+    temperature: float = 0.8,
+    top_k: int = 50,
+    top_p: float = 0.9,
+    repetition_penalty: float = 1.0,
+    concurrency_limit: int = 1,
+    queue_max_size: int | None = None,
+):
+    """Multi-visitor Gradio chat UI over one shared ``model``/``tokenizer``.
+
+    Each browser session gets its own ``ChatSession``: a Gradio ``gr.State`` is instantiated fresh per client
+    by default, so it starts as ``None`` and is lazily filled in on that visitor's first message — visitors
+    never see or affect each other's conversation, and the sampling sliders are likewise per-session
+    automatically. ``gradio`` is imported here, not at module top, so this module stays importable without it.
+
+    ``concurrency_limit`` caps how many replies generate at once; ``queue_max_size`` caps how many *waiting*
+    requests are accepted beyond that (``None`` = unbounded) — once full, Gradio tells new visitors the app is
+    busy instead of leaving them in an ever-growing queue. Visitors within the queue see their live position
+    and ETA automatically (built into Gradio's ``.queue()``, no extra wiring needed here).
+
+    Returns a ready ``gr.Blocks`` with ``.queue(...)`` already applied. Does **not** call ``.launch()`` — the
+    caller decides ``share``/``server_port`` (run-time choices, not build-time ones).
+    """
+    import gradio as gr
+
+    with gr.Blocks(title=title) as demo:
+        gr.Markdown(f"## {title}")
+        session_state = gr.State(None)  # fresh None per browser session; becomes a ChatSession on first Send
+        chatbot = gr.Chatbot(type="messages", height=400, label=title)
+        msg = gr.Textbox(placeholder="Type your message...", label="Message", lines=2)
+        with gr.Row():
+            send_btn = gr.Button("Send", variant="primary")
+            clear_btn = gr.Button("Clear")
+        with gr.Accordion("Sampling settings", open=False):
+            max_new_tokens_s = gr.Slider(16, 1024, value=max_new_tokens, step=16, label="Max tokens")
+            temperature_s = gr.Slider(0.1, 2.0, value=temperature, step=0.05, label="Temperature")
+            top_k_s = gr.Slider(1, 200, value=top_k, step=1, label="Top-K")
+            top_p_s = gr.Slider(0.1, 1.0, value=top_p, step=0.05, label="Top-P")
+            repetition_penalty_s = gr.Slider(1.0, 2.0, value=repetition_penalty, step=0.05, label="Repetition penalty")
+        sliders = [max_new_tokens_s, temperature_s, top_k_s, top_p_s, repetition_penalty_s]
+
+        def _send(state, message, history, *slider_values):
+            return gradio_chat_send(state, message, history, model, tokenizer, *slider_values)
+
+        def _clear(state):
+            return gradio_chat_clear(state)
+
+        send_btn.click(_send, [session_state, msg, chatbot, *sliders], [session_state, chatbot, msg])
+        msg.submit(_send, [session_state, msg, chatbot, *sliders], [session_state, chatbot, msg])
+        clear_btn.click(_clear, [session_state], [session_state, chatbot])
+
+    return demo.queue(default_concurrency_limit=concurrency_limit, max_size=queue_max_size)
+
+
 def interactive_chat(
     model: TransformerLM,
     tokenizer: LLMTokenizer,

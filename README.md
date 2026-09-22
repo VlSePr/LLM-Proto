@@ -15,6 +15,7 @@ A from-scratch LLaMA-style Transformer language model framework built with PyTor
 - **Weights & Biases** — experiment tracking, loss curves, sample generations, model visualizations
 - **5 Model Presets** — tiny (35M), small (100M), medium (303M), base (466M), large (1.5B)
 - **MoE Fine-tuning** — graft sparse Mixture-of-Experts layers onto a trained checkpoint, train only the experts, grow the pool round by round
+- **Gradio Share (optional)** — spin up a multi-visitor chat UI from `LLM-inference.ipynb` and open a temporary public link (`share=True`) so a room of visitors can each chat with the same loaded model at once, one private conversation per visitor
 - **Environment Support** — Google Colab, vast.ai, local GPU
 
 ## Quick Start
@@ -88,6 +89,11 @@ python -m src.generate --checkpoint checkpoints/best.pt --prompt "Once upon a ti
 # Interactive multi-turn chat
 python -m src.generate --checkpoint checkpoints/best.pt --repetition_penalty 1.2
 ```
+
+**Share it live (optional).** `LLM-inference.ipynb` section 6 wraps the loaded model in a small Gradio chat UI —
+set `GRADIO_SHARE = True` and it opens a temporary public link (expires in ~72h or when the Colab runtime stops)
+so multiple visitors can each chat with the same model from their own device, with independent conversation state
+per visitor.
 
 ### 6. Evaluate
 
