@@ -292,6 +292,26 @@ def gradio_chat_clear(session_state: "ChatSession | None") -> tuple["ChatSession
     return session_state, []
 
 
+def gradio_version_ok() -> bool:
+    """True if an installed gradio satisfies the pin (4.44.0 <= version < 6.0.0).
+
+    Colab ships its own pre-installed ``gradio`` that can predate the ``type="messages"`` kwarg
+    ``build_gradio_chat_demo`` relies on; a presence-only check (``find_spec``) would miss that and let
+    the mismatched version through, so callers must check the version, not just whether it's installed.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("gradio") is None:
+        return False
+    from importlib.metadata import version
+
+    try:
+        parts = tuple(int(p) for p in version("gradio").split(".")[:3] if p.isdigit())
+    except Exception:
+        return False
+    return (4, 44, 0) <= parts < (6, 0, 0)
+
+
 def build_gradio_chat_demo(
     model: TransformerLM,
     tokenizer: LLMTokenizer,
