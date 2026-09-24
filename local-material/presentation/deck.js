@@ -80,6 +80,9 @@
       .n-say b{color:#ffd1e6}
       .n-keys{font-size:17px;color:#d9d3f5;background:rgba(255,255,255,.05);border-radius:10px;padding:12px 16px 12px 34px;margin:6px 0 14px}
       .n-do{font-size:17px;color:#b8f5cf} .n-ask{font-size:17px;color:#ffd79a}
+      .n-at{display:block;margin-top:4px;color:#8f86b8}
+      .n-more{margin-top:14px;border:1px dashed #6a5fa0;border-radius:12px;padding:12px 16px;font-size:19px;line-height:1.5;color:#e4dcff}
+      .n-more-h{font-size:14px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#9d8bff;margin-bottom:6px}
       footer{padding:10px 22px;color:#8f86b8;font-size:15px} button{font:inherit;padding:6px 14px;margin-left:6px;border-radius:8px;border:0;cursor:pointer}
     </style></head><body><header><span id="pos"></span><span id="clock">00:00</span><span><button id="p">◀</button><button id="n">▶</button><button id="r">reset timer</button></span></header>
     <main><h2 id="t"></h2><div class="nx" id="nx"></div><div class="steps" id="st"></div><div class="notes" id="notes"></div></main>
@@ -114,6 +117,8 @@
       .n-say{font-size:17px;border-left:3px solid #FF4B9B;padding-left:12px;margin:0 0 10px}
       .n-keys{font-size:14px;color:#444;background:#f6f4fc;border-radius:8px;padding:8px 12px 8px 30px}
       .n-do{font-size:14px;color:#166534} .n-ask{font-size:14px;color:#9a5b00}
+      .n-at{display:block;color:#999} .n-more{border:1px dashed #b8adde;border-radius:8px;padding:8px 12px;font-size:15px;margin-top:8px}
+      .n-more-h{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#6042FF}
       button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid #6042FF;background:#fff;color:#6042FF;cursor:pointer}
       @media print{button,.hint{display:none} body{padding:0}}
     </style></head><body><h1>Building an LLM from scratch · speaker script</h1>

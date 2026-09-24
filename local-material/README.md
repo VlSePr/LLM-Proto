@@ -41,10 +41,13 @@ Slides are addressable as `#/N`, e.g. `http://localhost:8765/#/9`.
 
 ## Speaker notes
 
-Every slide's notes have the same parts: **⏱ timing** (six slides are marked *skip if short on time*), a plain-language
+Every slide's notes have the same parts: **⏱ timing** for a ~45-minute core talk and a ~75-minute extended one, with a
+running *by the end of this slide* checkpoint for both (six slides are marked *skip if short on time*), a plain-language
 **narration** you can read almost as-is (built on one set of analogies: the guessing game, the 32-floor building with a
 shared notebook, the classroom, clock hands), **key clues** (numbers and facts), **Do** (what to click) and
-**If asked**. Press `S` for the live notes window or `P` for the whole script.
+**If asked**, plus an **If you have time** block with deeper narration and audience moments for the extended version.
+In a 90-minute slot, the extended path leaves ~15 minutes for Q&A. Press `S` for the live notes window or `P` for the
+whole script.
 
 ## Before the talk
 
