@@ -54,7 +54,7 @@
     <table class="credits">
       <thead><tr><th>Used for</th><th>Dataset</th><th>Created by</th><th>License</th></tr></thead>
       <tbody>
-        <tr><td><span class="stage">Tokenizer</span></td>
+        <tr><td><span class="stage">Tokenizer</span> <span class="stage">Pretraining</span></td>
           <td><b>FineWeb-Edu</b><code>HuggingFaceFW/fineweb-edu</code></td>
           <td>Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, Thomas Wolf · <i>Hugging Face</i><small>built on FineWeb (Penedo et al., 2024)</small></td>
           <td>ODC-By 1.0</td></tr>
@@ -88,7 +88,7 @@
     <p class="credits-foot" style="margin-top:0"><b>Ideas &amp; tools:</b> LLaMA (Touvron et al., 2023) · RMSNorm (Zhang &amp; Sennrich, 2019) · RoPE (Su et al., 2021) · SwiGLU (Shazeer, 2020) · GQA (Ainslie et al., 2023) · PyTorch · Hugging Face tokenizers &amp; datasets · Google Colab</p>
   </div>
   <aside class="notes">
-    <p>Thirty seconds, but worth saying out loud: none of this works without people who spend months building and cleaning open datasets and then give them away. Tokenizer from FineWeb-Edu, pretraining on Project Gutenberg (which is why it talks like a Victorian novel), chat from SmolTalk, UltraChat, Dolly and Alpaca.</p>
+    <p>Thirty seconds, but worth saying out loud: none of this works without people who spend months building and cleaning open datasets and then give them away. FineWeb-Edu for the tokenizer and pretraining, Project Gutenberg for pretraining too (the books are why it talks like a Victorian novel), chat from SmolTalk, UltraChat, Dolly and Alpaca.</p>
     <p>Licenses are as listed on each Hugging Face dataset card. The Elden Ring QA set is non-commercial, so this is a research / demo model, not a product.</p>
   </aside>
 </section>
@@ -333,7 +333,7 @@
     <span class="eyebrow">src/data.py</span>
     <h2>Training never tokenizes</h2>
     <div class="flow" style="margin-top:30px">
-      <div class="fnode step"><span class="ico">{ sources }</span><h4>Sources</h4><p>HF streaming, text dirs, JSONL. The base run used <b>Project Gutenberg</b> books.</p></div>
+      <div class="fnode step"><span class="ico">{ sources }</span><h4>Sources</h4><p>HF streaming, text dirs, JSONL. The base model was pretrained on <b>FineWeb-Edu</b> and <b>Project Gutenberg</b>.</p></div>
       <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#6042FF" stroke-width="3" fill="none"/></svg></div>
       <div class="fnode step"><span class="ico">BPE 32k</span><h4>Tokenizer</h4><p>Byte-level BPE with byte fallback: no unknown tokens, ever.</p></div>
       <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#893FFF" stroke-width="3" fill="none"/></svg></div>
@@ -458,7 +458,7 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       </div>
       <div class="pnode" data-n="hf" style="left:0;top:262px;width:370px;height:170px">
         <div class="ph"><span class="pico">🤗</span>HuggingFace Hub</div>
-        <div class="pm">sedthh/gutenberg_english</div>
+        <div class="pm">fineweb-edu · gutenberg_english</div>
         <div class="pl">chat: smoltalk · dolly<br>ultrachat · alpaca</div>
       </div>
       <div class="pnode" data-n="ws" style="left:0;top:524px;width:370px;height:170px">
@@ -600,7 +600,7 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
         </table>
       </div>
       <div class="col" style="display:flex;flex-direction:column;gap:22px">
-        <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">5.5B</div><div class="lbl">pretraining tokens · 11 GB</div><div class="sub">Gutenberg, 56 shards of 100M</div></div>
+        <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">5.5B</div><div class="lbl">Gutenberg tokens · 11 GB</div><div class="sub">56 shards of 100M · plus FineWeb-Edu</div></div>
         <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">1.22M</div><div class="lbl">chat conversations · 2 GB</div><div class="sub">0.98B tokens, 0.72B of them learned (loss-masked)</div></div>
         <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">~$120</div><div class="lbl">Colab compute so far</div><div class="sub">Drive: ~13 GB data + ~18 GB per kept checkpoint</div></div>
       </div>
@@ -753,7 +753,7 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
 <!-- ═════════════════════════ 25. BASE MODEL SPEAKS VICTORIAN ═════════════════════════ -->
 <section class="slide blob" data-title="The base model">
   <div class="inner">
-    <span class="eyebrow">Base model · pre-trained on Project Gutenberg</span>
+    <span class="eyebrow">Base model · FineWeb-Edu + Project Gutenberg</span>
     <h2>It speaks fluent 19th century</h2>
     <div class="grid3" style="margin-top:10px">
       <div class="fail-card step"><div class="q">You: “someone who runs meetings confidently and explains nothing correctly”</div><div class="a">“…and then makes a lot of noise. Somebody else gives you the same information, too; but when I get down to telling how people are running business…”</div><div class="why">Grammatical, period-perfect and on-topic-ish. It learned <b>style</b> first.</div></div>
@@ -905,7 +905,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     <span class="eyebrow" style="-webkit-text-fill-color:#fff">Roadmap</span>
     <h2 style="color:#fff">What's next</h2>
     <div class="grid3" style="margin-top:10px">
-      <div class="card"><h3>Better data</h3><p>Mix FineWeb-Edu with the books, dedupe, filter scan artefacts, and aim for Chinchilla-scale tokens (~30B).</p></div>
+      <div class="card"><h3>Better data</h3><p>Rebalance toward modern text (more FineWeb-Edu), dedupe, filter scan artefacts, and aim for Chinchilla-scale tokens (~30B).</p></div>
       <div class="card"><h3>Real chat SFT</h3><p>A proper instruction set in ChatML, with evaluation on held-out prompts instead of vibes.</p></div>
       <div class="card"><h3>Measure the experts</h3><p>Domain perplexity before/after each growth round, expert load and forgetting on general text.</p></div>
     </div>
@@ -986,7 +986,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
 <script src="assets/vendor/qrcode.js"></script>
 <script src="assets/vendor/three.min.js"></script>
 <script src="deck.js?v=30"></script>
-<script src="widgets.js?v=70"></script>
+<script src="widgets.js?v=80"></script>
 <script src="model3d.js?v=4"></script>
 </body>
 </html>

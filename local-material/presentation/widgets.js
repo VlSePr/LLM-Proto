@@ -257,8 +257,8 @@
     const rows = data.rows;
     const list = $(".px-list", el);
     const COLS = [
-      { key: "base", title: "Base model", meta: "Gutenberg · rep 1.5" },
-      { key: "base_rp2", title: "Base, stricter", meta: "Gutenberg · rep 2.0" },
+      { key: "base", title: "Base model", meta: "pretrained · rep 1.5" },
+      { key: "base_rp2", title: "Base, stricter", meta: "pretrained · rep 2.0" },
       { key: "chat", title: "Chat fine-tune", meta: "ChatML SFT · rep 1.5", cls: "chat" },
     ];
     const HL = {
