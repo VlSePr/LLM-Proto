@@ -507,6 +507,31 @@
   // ════════════════════════════════════════════════════════════
   // 10. Live demo 1: Gradio share link → QR code (LLM-inference.ipynb, GRADIO_SHARE = True)
   // ════════════════════════════════════════════════════════════
+  // Static QR codes: any element with data-qr="<url>" (e.g. the "Go deeper" slide).
+  document.querySelectorAll("[data-qr]").forEach((box) => {
+    const qr = qrcode(0, "M");
+    qr.addData(box.dataset.qr); qr.make();
+    box.innerHTML = qr.createSvgTag({ cellSize: 8, margin: 0, scalable: true });
+  });
+
+  // "Get everything" slide: one card per entry in links.js; an empty url shows "link coming soon".
+  const linksEl = document.getElementById("links");
+  if (linksEl) {
+    linksEl.innerHTML = (window.DECK_LINKS || []).map((l, i) => `
+      <div class="link-card">
+        <span class="where">${esc(l.where || "")}</span>
+        <h3>${esc(l.title)}</h3>
+        <div class="what">${esc(l.what || "")}</div>
+        <div class="qr${l.url ? "" : " soon"}" data-i="${i}">${l.url ? "" : "link coming soon"}</div>
+        <div class="url">${l.url ? esc(l.url.replace(/^https?:\/\//, "")) : ""}</div>
+      </div>`).join("");
+    linksEl.querySelectorAll(".qr:not(.soon)").forEach((box) => {
+      const qr = qrcode(0, "M");
+      qr.addData(window.DECK_LINKS[+box.dataset.i].url); qr.make();
+      box.innerHTML = qr.createSvgTag({ cellSize: 8, margin: 0, scalable: true });
+    });
+  }
+
   onEnter("live-chat", (el) => {
     const input = $(".qr-input", el), img = $(".qr-img", el), urlEl = $(".qr-url", el);
     function render(url) {

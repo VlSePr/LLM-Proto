@@ -502,3 +502,44 @@ table.res small { font-size: 16px; color: var(--ink-3); margin-left: 8px; font-w
 .mi-stats b { display: block; font: 400 48px/1 var(--display); color: #fff; }
 .m3d-btns { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
 .m3d-btns .btn.on { background: rgba(255,255,255,.2); }
+
+/* ─── Credits ─── */
+table.credits { width: 100%; border-collapse: collapse; font-size: 19px; line-height: 1.3; }
+table.credits th { text-align: left; font: 700 16px/1 var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); padding: 0 14px 12px; border-bottom: 2px solid var(--ink); }
+table.credits td { padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--ink-2); }
+table.credits td:nth-child(1) { width: 150px; }
+table.credits td:nth-child(2) { width: 400px; }
+table.credits td:nth-child(4) { width: 250px; font-size: 17px; }
+table.credits td b { display: block; font-size: 21px; color: var(--ink); }
+table.credits code { font-size: 15px; display: inline-block; margin-top: 3px; }
+table.credits small { display: block; font-size: 15px; color: var(--ink-3); margin-top: 3px; }
+table.credits .stage { display: inline-block; font: 700 14px/1 var(--body); letter-spacing: .1em; text-transform: uppercase; padding: 6px 10px; border-radius: 6px; background: rgba(255,119,1,.12); color: #c25a00; }
+table.credits .stage.chat { background: rgba(96,66,255,.1); color: var(--violet); }
+table.credits .stage.moe { background: rgba(255,75,155,.12); color: #d81b72; }
+.credits-foot { margin-top: 18px; font-size: 19px; color: var(--ink-3); }
+.credits-foot b { color: var(--ink); }
+
+/* ─── Inspiration card (Why build one) ─── */
+.inspired { margin-top: 44px; max-width: 1500px; padding: 22px 30px; border-radius: 18px; background: rgba(255,255,255,.82);
+  border: 2px solid transparent; background: linear-gradient(#fff, #fff) padding-box, var(--grad) border-box; font-size: 27px; color: var(--ink-2); }
+.inspired-k { font: 700 16px/1 var(--body); letter-spacing: .22em; text-transform: uppercase; color: var(--pink); margin-bottom: 10px; }
+.inspired-s { font-size: 21px; color: var(--ink-3); margin-top: 6px; }
+.inspired-s .mono { font-size: 18px; color: var(--violet); }
+
+/* ─── Go deeper: sessions ─── */
+.sessions { display: flex; flex-direction: column; gap: 16px; }
+.session { display: flex; gap: 26px; align-items: center; background: rgba(255,255,255,.82); border-radius: 18px; padding: 18px 28px; box-shadow: var(--shadow); }
+.session .colnum { margin: 0; font-size: 72px; flex: none; width: 90px; }
+.session h3 { font-size: 40px; margin: 0 0 6px; }
+.session p { margin: 0; font: 500 19px/1.3 var(--mono); color: var(--ink-3); }
+
+/* ─── Get everything: link cards ─── */
+.links-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; }
+.link-card { background: #fbfaff; border: 1px solid var(--line); border-radius: 22px; padding: 28px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; }
+.link-card .where { font: 700 16px/1 var(--body); letter-spacing: .2em; text-transform: uppercase; color: var(--pink); }
+.link-card h3 { font-size: 52px; margin: 0; }
+.link-card .what { font-size: 21px; color: var(--ink-2); line-height: 1.35; min-height: 56px; }
+.link-card .qr { width: 250px; height: 250px; margin: 6px 0; }
+.link-card .qr svg { width: 100%; height: 100%; }
+.link-card .qr.soon { display: flex; align-items: center; justify-content: center; border: 3px dashed #d9d3ee; border-radius: 16px; color: var(--ink-3); font: 600 22px/1.3 var(--body); }
+.link-card .url { font: 500 17px/1.3 var(--mono); color: var(--violet); word-break: break-all; }

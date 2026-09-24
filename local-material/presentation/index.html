@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Building an LLM from Scratch</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%236042FF'/%3E%3Cstop offset='1' stop-color='%23FF7701'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23g)'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='white' font-family='Arial' font-weight='700'%3EAI%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="deck.css?v=40">
+<link rel="stylesheet" href="deck.css?v=70">
 <style>aside.notes { display: none; }</style>
 </head>
 <body>
@@ -46,9 +46,56 @@
   <aside class="notes"><p>About 45 minutes. The audience gets the chat link right after this slide and keeps it for the whole talk. The tiny model starts training at the beginning of Part 3 and we check back on it in Part 4.</p></aside>
 </section>
 
+<!-- ═════════════════════════ CREDITS ═════════════════════════ -->
+<section class="slide white" data-title="Credits: datasets">
+  <div class="inner" style="top:128px;bottom:96px">
+    <span class="eyebrow">Credits · the data this model learned from</span>
+    <h2 style="font-size:86px;margin-bottom:14px">Standing on the shoulders of…</h2>
+    <table class="credits">
+      <thead><tr><th>Used for</th><th>Dataset</th><th>Created by</th><th>License</th></tr></thead>
+      <tbody>
+        <tr><td><span class="stage">Tokenizer</span></td>
+          <td><b>FineWeb-Edu</b><code>HuggingFaceFW/fineweb-edu</code></td>
+          <td>Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, Thomas Wolf · <i>Hugging Face</i><small>built on FineWeb (Penedo et al., 2024)</small></td>
+          <td>ODC-By 1.0</td></tr>
+        <tr><td><span class="stage">Pretraining</span></td>
+          <td><b>Project Gutenberg, English</b><code>sedthh/gutenberg_english</code></td>
+          <td>Michael S. Hart, who founded Project Gutenberg in 1971, and its thousands of volunteers<small>cleaned and packaged for HF by sedthh</small></td>
+          <td>public-domain books · MIT card</td></tr>
+        <tr><td><span class="stage chat">Chat SFT</span></td>
+          <td><b>SmolTalk</b><code>HuggingFaceTB/smoltalk</code></td>
+          <td>Loubna Ben Allal, Anton Lozhkov, Elie Bakouch, Gabriel Martín Blázquez, Guilherme Penedo, Lewis Tunstall … Thomas Wolf · <i>Hugging Face</i><small>SmolLM2 paper, 22 authors</small></td>
+          <td>Apache 2.0 (new subsets)</td></tr>
+        <tr><td><span class="stage chat">Chat SFT</span></td>
+          <td><b>UltraChat 200k</b><code>HuggingFaceH4/ultrachat_200k</code></td>
+          <td>Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Zhi Zheng, Shengding Hu, Zhiyuan Liu, Maosong Sun, Bowen Zhou · <i>Tsinghua</i><small>filtered by Hugging Face H4 for Zephyr</small></td>
+          <td>MIT</td></tr>
+        <tr><td><span class="stage chat">Chat SFT</span></td>
+          <td><b>Dolly 15k</b><code>databricks/databricks-dolly-15k</code></td>
+          <td>Mike Conover, Matt Hayes, Ankit Mathur, Jianwei Xie, Jun Wan, Sam Shah, Ali Ghodsi, Patrick Wendell, Matei Zaharia, Reynold Xin<small>written by thousands of Databricks employees</small></td>
+          <td>CC BY-SA 3.0</td></tr>
+        <tr><td><span class="stage chat">Chat SFT</span></td>
+          <td><b>Alpaca (cleaned)</b><code>yahma/alpaca-cleaned</code></td>
+          <td>Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li, Carlos Guestrin, Percy Liang, Tatsunori Hashimoto · <i>Stanford</i><small>cleaned by yahma</small></td>
+          <td>CC BY 4.0</td></tr>
+        <tr><td><span class="stage moe">MoE lore</span></td>
+          <td><b>Dark Souls &amp; Elden Ring</b><code>SantaBot · antoshka1608 · AINovice2005 · ArenaRune</code></td>
+          <td>Community contributors on Hugging Face<small>game text © FromSoftware / Bandai Namco</small></td>
+          <td>EldenRingQA CC BY-NC 4.0 · others unstated</td></tr>
+      </tbody>
+    </table>
+    <p class="credits-foot" style="margin-bottom:4px"><b>Inspiration:</b> Sebastian Raschka, <i>Build a Large Language Model (From Scratch)</i>, Manning, 2024 · <code>github.com/rasbt/LLMs-from-scratch</code></p>
+    <p class="credits-foot" style="margin-top:0"><b>Ideas &amp; tools:</b> LLaMA (Touvron et al., 2023) · RMSNorm (Zhang &amp; Sennrich, 2019) · RoPE (Su et al., 2021) · SwiGLU (Shazeer, 2020) · GQA (Ainslie et al., 2023) · PyTorch · Hugging Face tokenizers &amp; datasets · Google Colab</p>
+  </div>
+  <aside class="notes">
+    <p>Thirty seconds, but worth saying out loud: none of this works without people who spend months building and cleaning open datasets and then give them away. Tokenizer from FineWeb-Edu, pretraining on Project Gutenberg (which is why it talks like a Victorian novel), chat from SmolTalk, UltraChat, Dolly and Alpaca.</p>
+    <p>Licenses are as listed on each Hugging Face dataset card. The Elden Ring QA set is non-commercial, so this is a research / demo model, not a product.</p>
+  </aside>
+</section>
+
 <!-- ═════════════════════════ 3. QUOTE ═════════════════════════ -->
 <section class="slide blob" data-title="Why build one">
-  <div class="inner center" style="top:120px">
+  <div class="inner center" style="top:110px">
     <div class="quote-mark">“</div>
     <div class="quote">What I cannot create,<br>I do not understand.</div>
     <p class="small" style="margin-top:28px;font-size:28px">Richard Feynman, on his blackboard, 1988</p>
@@ -57,8 +104,13 @@
       <div class="callout"><b>Small is honest.</b> At 1.5B every failure is visible, and so is every fix.</div>
       <div class="callout"><b>It's affordable.</b> One rented GPU and ~$120 of compute got a model that writes fluent English.</div>
     </div>
+    <div class="inspired step">
+      <div class="inspired-k">Where this started</div>
+      <div><b>Sebastian Raschka</b> · <i>Build a Large Language Model (From Scratch)</i> · Manning, 2024</div>
+      <div class="inspired-s">The book that made me try this myself. Its step-by-step GPT build is the ancestor of this project. <span class="mono">github.com/rasbt/LLMs-from-scratch</span></div>
+    </div>
   </div>
-  <aside class="notes"><p>Why do this in 2026 when frontier models exist? Not to compete. You build one to understand one. Every concept you use daily as an AI engineer (context windows, sampling, fine-tuning, MoE) becomes concrete.</p><p>Click to reveal the three reasons.</p></aside>
+  <aside class="notes"><p>Why do this in 2026 when frontier models exist? Not to compete. You build one to understand one. Every concept you use daily as an AI engineer (context windows, sampling, fine-tuning, MoE) becomes concrete.</p><p>Click to reveal the three reasons, then the credit: Sebastian Raschka's book <i>Build a Large Language Model (From Scratch)</i> is what inspired this project. Worth recommending to the audience as the place to start.</p></aside>
 </section>
 
 <!-- ═════════════════════════ LIVE 1: CHAT WITH THE 1.5B ═════════════════════════ -->
@@ -861,6 +913,45 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
   </div>
 </section>
 
+<!-- ═════════════════════════ GO DEEPER: 4 SESSIONS ═════════════════════════ -->
+<section class="slide soft" data-title="Go deeper: 4 sessions">
+  <div class="inner" style="top:128px">
+    <span class="eyebrow">Want the low-level details?</span>
+    <h2 style="font-size:92px;margin-bottom:10px">From Principles to Practice: LLM Mastery</h2>
+    <p class="lead" style="font-size:30px;margin-bottom:34px">Four sessions on EPAM's community platform, where I go through everything in this talk line by line.</p>
+    <div class="row" style="gap:44px;align-items:stretch">
+      <div class="col sessions">
+        <div class="session"><div class="colnum">01</div><div><h3>AI main principles, LLM architecture and tokenizer</h3><p>today: Part 1 · Part 2</p></div></div>
+        <div class="session"><div class="colnum">02</div><div><h3>Embeddings, attention mechanism, and how to teach your LLM</h3><p>today: embedding space · RoPE · GQA · training loop</p></div></div>
+        <div class="session"><div class="colnum">03</div><div><h3>Building a core LLM</h3><p>today: Part 3 · the 1.5B in 3D · live tiny training</p></div></div>
+        <div class="session"><div class="colnum">04</div><div><h3>Train your expert layer</h3><p>today: Bonus · grafting experts</p></div></div>
+      </div>
+      <div style="width:420px;flex:none;display:flex;flex-direction:column;align-items:center;gap:16px">
+        <div class="qr-box" style="width:380px;height:380px"><div class="qr-img" data-qr="https://wearecommunity.io/communities/X35JBhn7Fi/from-principles-to-practice-llm-mastery"></div></div>
+        <div class="small" style="text-align:center;font-size:20px">wearecommunity.io · <b>EPAM SSO</b> login</div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>For anyone who wants the details behind each part of today's talk. Each session maps to a part of this deck.</p>
+    <p>The page is on EPAM's community platform and needs EPAM SSO, so external guests may not be able to open it. Mention that, and point them to the Raschka book and the GitHub repo instead.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ GET EVERYTHING: LINKS ═════════════════════════ -->
+<section class="slide white" data-title="Get everything">
+  <div class="inner" style="top:128px">
+    <span class="eyebrow">Take it home</span>
+    <h2 style="font-size:96px;margin-bottom:12px">Get the code, the model and the data</h2>
+    <p class="lead" style="font-size:30px;margin-bottom:36px">Everything you saw today is open. Clone it, run the tests (~6 s on a CPU), and train your own tiny model on Colab.</p>
+    <div id="links" class="links-grid"></div>
+  </div>
+  <aside class="notes">
+    <p>Leave this up during Q&amp;A so people can scan the codes. Links live in <code>links.js</code>: paste a URL into a card and it gets a QR code; empty cards say "link coming soon".</p>
+    <p>The SharePoint links need an EPAM login, same as the sessions page.</p>
+  </aside>
+</section>
+
 <!-- ═════════════════════════ 34. THANK YOU ═════════════════════════ -->
 <section class="slide dark bg-bottom" data-title="Thank you">
   <div class="inner" style="top:200px">
@@ -888,13 +979,14 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
   <div><kbd>Home / End</kbd>first / last slide</div>
 </div></div>
 
+<script src="links.js?v=1"></script>
 <script src="assets/data/prompts.js"></script>
 <script src="assets/data/embeddings.js"></script>
 <script src="assets/vendor/plotly.min.js"></script>
 <script src="assets/vendor/qrcode.js"></script>
 <script src="assets/vendor/three.min.js"></script>
 <script src="deck.js?v=30"></script>
-<script src="widgets.js?v=30"></script>
+<script src="widgets.js?v=70"></script>
 <script src="model3d.js?v=4"></script>
 </body>
 </html>
