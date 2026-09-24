@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building an LLM from Scratch</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%236042FF'/%3E%3Cstop offset='1' stop-color='%23FF7701'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23g)'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='white' font-family='Arial' font-weight='700'%3EAI%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="deck.css?v=40">
+<style>aside.notes { display: none; }</style>
+</head>
+<body>
+<div id="stage">
+
+<!-- ═════════════════════════ 1. COVER ═════════════════════════ -->
+<section class="slide dark bg-cover no-chrome" data-title="Cover">
+  <img src="assets/logo/image3.svg" alt="epam" style="position:absolute;left:120px;top:96px;height:34px">
+  <span style="position:absolute;left:250px;top:100px;font:600 22px/1 var(--body);letter-spacing:.3em;color:rgba(255,255,255,.8)">|&nbsp;&nbsp;&nbsp;PRESENTS</span>
+  <div style="position:absolute;left:120px;top:200px;width:1100px">
+    <img src="assets/logo/image2.svg" alt="EPAM.AI Conference · 28 Sep – 2 Oct 2026" style="height:72px;margin-bottom:40px;display:block">
+    <h1 style="font-size:190px;line-height:.9">Building an LLM<br>from scratch</h1>
+    <div style="margin:38px 0 34px"><span class="pill">The real deal</span></div>
+    <p class="lead" style="max-width:980px">1.5 billion parameters, one Colab GPU, and every line written by hand. Today we train a tiny one live, and you get to chat with the big one.</p>
+    <p style="margin-top:40px;font:600 34px/1.3 var(--body);letter-spacing:.06em">Volodymyr Prudnikov&nbsp;&nbsp;<span style="opacity:.6;font-weight:400">· EPAM</span></p>
+  </div>
+  <aside class="notes">
+    <p>Welcome. The talk is about building a LLaMA-style language model <b>from an empty folder</b>, with no HF Transformers and no pre-trained weights, and about what that actually teaches you.</p>
+    <p>It's "the real deal": real numbers, real loss curves, real (often funny) outputs. The deck is interactive, and I'll be clicking things.</p>
+    <p>Controls: → next, ← back, O overview, F fullscreen, S this notes window.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 2. CONTENTS ═════════════════════════ -->
+<section class="slide soft" data-title="Contents">
+  <div class="inner">
+    <span class="eyebrow">Contents</span>
+    <h2>Four parts, two live demos</h2>
+    <div class="toc" style="margin-top:40px">
+      <div class="item"><div class="n gtext">▶</div><div class="t">First: chat with it <span class="live-chip">live</span></div><div class="d">Scan a QR code and talk to the 1.5B model for the rest of the talk</div></div>
+      <div class="item"><div class="n gtext">01</div><div class="t">Architecture</div><div class="d">RMSNorm, RoPE, GQA, SwiGLU: the LLaMA recipe, piece by piece</div></div>
+      <div class="item"><div class="n gtext">02</div><div class="t">Data &amp; tokenizer</div><div class="d">BPE, fingerprinted shards, and why training never tokenizes</div></div>
+      <div class="item"><div class="n gtext">03</div><div class="t">Training <span class="live-chip">live</span></div><div class="d">We train a tiny LLM on stage, then look at the big run: GitHub + Drive + Colab, resume, loss curves</div></div>
+      <div class="item"><div class="n gtext">04</div><div class="t">Making it talk</div><div class="d">Sampling, a Victorian base model, chat fine-tuning, and why your chats broke</div></div>
+      <div class="item"><div class="n gtext">+</div><div class="t">Experts &amp; lessons</div><div class="d">A quick look at Mixture-of-Experts, then what was worth it</div></div>
+    </div>
+  </div>
+  <aside class="notes"><p>About 45 minutes. The audience gets the chat link right after this slide and keeps it for the whole talk. The tiny model starts training at the beginning of Part 3 and we check back on it in Part 4.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 3. QUOTE ═════════════════════════ -->
+<section class="slide blob" data-title="Why build one">
+  <div class="inner center" style="top:120px">
+    <div class="quote-mark">“</div>
+    <div class="quote">What I cannot create,<br>I do not understand.</div>
+    <p class="small" style="margin-top:28px;font-size:28px">Richard Feynman, on his blackboard, 1988</p>
+    <div class="grid3 step" style="margin-top:70px;max-width:1500px">
+      <div class="callout"><b>APIs hide the knobs.</b> Temperature, context and "hallucination" only make sense once you've built them.</div>
+      <div class="callout"><b>Small is honest.</b> At 1.5B every failure is visible, and so is every fix.</div>
+      <div class="callout"><b>It's affordable.</b> One rented GPU and ~$120 of compute got a model that writes fluent English.</div>
+    </div>
+  </div>
+  <aside class="notes"><p>Why do this in 2026 when frontier models exist? Not to compete. You build one to understand one. Every concept you use daily as an AI engineer (context windows, sampling, fine-tuning, MoE) becomes concrete.</p><p>Click to reveal the three reasons.</p></aside>
+</section>
+
+<!-- ═════════════════════════ LIVE 1: CHAT WITH THE 1.5B ═════════════════════════ -->
+<section class="slide dark bg-dim" data-title="Live: chat with the 1.5B">
+  <div class="inner" id="live-chat">
+    <span class="live-badge"><i></i>Live demo 1 · your turn</span>
+    <h2 style="margin-top:18px">Before we start: chat with the 1.5B</h2>
+    <div class="row" style="gap:70px">
+      <div style="width:560px;flex:none;display:flex;flex-direction:column;gap:20px;align-items:flex-start">
+        <div class="qr-box"><div class="qr-img"><span>Paste the Gradio link below</span></div></div>
+        <div class="qr-url mono"></div>
+        <div style="display:flex;gap:10px;width:100%">
+          <input class="qr-input" type="url" placeholder="https://xxxx.gradio.live">
+          <button class="btn qr-set">Show</button>
+        </div>
+      </div>
+      <div class="col">
+        <h3>Things to try</h3>
+        <div class="try-list">
+          <button>We didnt start the fire, it was always burning since the world was turning</button>
+          <button>Imagine a metaphor about fire</button>
+          <button>Who was Queen Victoria?</button>
+          <button>You are a helpful advisor who knows about physics. Is gravity a force?</button>
+          <button>Tell me a story about a dragon who learns to code</button>
+        </div>
+        <p class="small" style="margin-top:26px;font-size:22px">T 0.8 · top-k 50 · top-p 0.9 · up to 256 tokens · one shared GPU, so requests queue</p>
+        <p class="body" style="margin-top:10px;font-size:26px">Keep it open during the talk and try to break it. In Part 4 we'll look at <b>why</b> it breaks.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><b>Before the talk:</b> run LLM-inference.ipynb up to section 6 with GRADIO_SHARE = True, then paste the *.gradio.live link here (or open the deck with <code>?live=&lt;url&gt;</code>). The link is remembered in this browser.</p>
+    <p>Give people a minute to scan the QR code and try a prompt or two, and maybe try one yourself on screen. Then: "This is what we're going to build, piece by piece."</p>
+    <p>If Wi-Fi or Colab fails, skip ahead: Part 4 has the same prompts recorded in rehearsal (prompt explorer).</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 4. DIVIDER: ARCHITECTURE ═════════════════════════ -->
+<section class="slide dark bg-waves divider" data-title="Part 1 · Architecture">
+  <div class="inner center">
+    <div class="partno">Part 01</div>
+    <h1>Architecture</h1>
+    <p class="lead" style="margin-top:30px">A decoder-only transformer in ~500 lines of PyTorch: <code>src/model.py</code></p>
+  </div>
+</section>
+
+<!-- ═════════════════════════ 5. AT A GLANCE ═════════════════════════ -->
+<section class="slide grad" data-title="The model at a glance">
+  <div class="inner" id="glance">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end">
+      <div><span class="eyebrow" style="-webkit-text-fill-color:#fff">Same code, two presets · <span class="g-preset">preset “large”</span></span>
+      <h2 style="color:#fff">The model at a glance</h2></div>
+      <div class="seg seg-light" style="margin-bottom:40px"><button data-p="tiny">Tiny · trained live</button><button data-p="large" class="on">Large · 1.5B</button></div>
+    </div>
+    <div class="grid4">
+      <div class="stat"><div class="num" data-k="params"></div><div class="lbl">parameters</div><div class="sub" data-k="params_s"></div></div>
+      <div class="stat"><div class="num" data-k="layers"></div><div class="lbl">transformer blocks</div><div class="sub" data-k="layers_s"></div></div>
+      <div class="stat"><div class="num" data-k="heads"></div><div class="lbl">query / KV heads</div><div class="sub" data-k="heads_s"></div></div>
+      <div class="stat"><div class="num" data-k="ffn"></div><div class="lbl">SwiGLU hidden</div><div class="sub" data-k="ffn_s"></div></div>
+      <div class="stat"><div class="num" data-k="ctx"></div><div class="lbl">context tokens</div><div class="sub">RoPE θ = 10,000</div></div>
+      <div class="stat"><div class="num">32k</div><div class="lbl">BPE vocabulary</div><div class="sub">same tokenizer for both</div></div>
+      <div class="stat"><div class="num" data-k="tps"></div><div class="lbl">tokens / second</div><div class="sub" data-k="tps_s"></div></div>
+      <div class="stat"><div class="num" data-k="ppl"></div><div class="lbl">val perplexity</div><div class="sub" data-k="ppl_s"></div></div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Toggle between the two presets. Everything comes from <code>MODEL_CONFIGS</code> in <code>src/config.py</code>: same code, different numbers. Tiny is 43× smaller, which is why we can train it live.</p>
+    <p>Perplexity 6.56 means that on held-out text the big model is, on average, as unsure as picking among ~6.5 equally likely tokens.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 3D MODEL ═════════════════════════ -->
+<section class="slide dark bg-dim" data-title="The 1.5B in 3D">
+  <div class="inner" style="top:120px;bottom:96px">
+    <div id="m3d" class="m3d">
+      <div class="m3d-view">
+        <canvas></canvas>
+        <div class="m3d-legend"><span><i style="background:#FF7701"></i>embedding / head</span><span><i style="background:#6042FF"></i>attention</span><span><i style="background:#FF4B9B"></i>SwiGLU</span><span><i style="background:#9fe8ff"></i>residual stream</span></div>
+        <div class="m3d-hint">drag to rotate · scroll to zoom · click anything</div>
+      </div>
+      <div class="m3d-panel">
+        <span class="eyebrow">Interactive · 3D · preset “large”</span>
+        <h2>The 1.5B in 3D</h2>
+        <div class="m3d-info"><div class="mi-kicker"></div><h3 class="mi-title"></h3><div class="mi-sub"></div><p class="mi-body"></p><div class="mi-stats"></div></div>
+        <div class="m3d-btns">
+          <button class="btn primary" data-a="flow">▶ Send a token through</button>
+          <button class="btn" data-a="spin">Auto-rotate</button>
+          <button class="btn" data-a="reset">Reset</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>The whole model, to scale where it matters: block sizes follow parameter counts (SwiGLU slabs are wider than attention), and the residual stream's thickness follows the measured activation std per layer (≈ read from the activation-stats chart), so you can see it swell in the last 10 layers.</p>
+    <p>Suggested demo: press "Send a token through", then click block 0 (it opens up) and a late block like 28 and compare the stats. Inside an open block, click the query heads, the KV heads (GQA lines, 4:1), the RoPE ring and the three SwiGLU matrices.</p>
+    <p>The "early / middle / late" descriptions are what probing studies usually find in LLaMA-style models, not something we measured. The activation and weight observations are ours.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 6. ARCHITECTURE EXPLORER ═════════════════════════ -->
+<section class="slide white" data-title="Anatomy of a block">
+  <div class="inner" style="top:130px">
+    <div id="arch" class="arch">
+      <div style="display:flex;flex-direction:column;flex:none">
+        <span class="eyebrow">Interactive · click any layer</span>
+        <div class="arch-stack"></div>
+        <div style="display:flex;gap:18px;align-items:center;margin-top:6px">
+          <button class="btn primary arch-trace">▶ Trace a token</button>
+          <span class="small">one block = <b class="arch-perlayer"></b></span>
+        </div>
+      </div>
+      <div class="arch-detail"></div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Click through the stack. Key points: pre-norm, a residual stream that is only ever added to, and 32 identical blocks.</p>
+    <p>"Trace a token" animates one forward pass. The parameter counts are exact for the large preset: 45.1M per block × 32 + 65.5M embeddings = 1,508.5M.</p>
+    <p>~77% of a block's parameters are the FFN, which is why MoE later replaces exactly that module.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 7. RMSNORM + SWIGLU ═════════════════════════ -->
+<section class="slide white" data-title="RMSNorm and SwiGLU">
+  <div class="inner">
+    <span class="eyebrow">Two small changes, big stability win</span>
+    <h2>RMSNorm &amp; SwiGLU</h2>
+    <div class="grid2">
+      <div class="card accent">
+        <h3>RMSNorm</h3>
+        <div class="math" style="margin:10px 0 22px">LayerNorm: (<span class="v">x</span> − μ) / σ · <span class="v">g</span> + <span class="v">b</span><br>RMSNorm: <span class="v">x</span> / √(mean(<span class="v">x</span>²) + ε) · <span class="v">g</span></div>
+        <ul class="bul">
+          <li>No mean subtraction and no bias, so it's cheaper and just as stable</li>
+          <li><b>Pre-norm</b>: applied before each sub-layer, so the residual stream stays raw</li>
+          <li>Computed in fp32 even under bf16 autocast</li>
+        </ul>
+      </div>
+      <div class="card accent">
+        <h3>SwiGLU feed-forward</h3>
+        <div class="math" style="margin:10px 0 22px">FFN(<span class="v">x</span>) = W<sub>down</sub>( SiLU(W<sub>gate</sub><span class="v">x</span>) ⊙ W<sub>up</sub><span class="v">x</span> )</div>
+        <ul class="bul">
+          <li>A learned <b>gate</b> decides, per dimension, how much signal passes</li>
+          <li>3 matrices, so hidden = 8/3·d instead of 4·d keeps the parameters equal</li>
+          <li>2048 → <b>5632</b> → 2048: 34.6M parameters per layer</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Both come from the LLaMA paper lineage (Zhang &amp; Sennrich 2019; Shazeer 2020). Neither is exotic; together they're the difference between a GPT-2 block and a LLaMA block.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 8. ROPE ═════════════════════════ -->
+<section class="slide white" data-title="RoPE">
+  <div class="inner">
+    <span class="eyebrow">Interactive · position as rotation</span>
+    <h2>RoPE: rotary position embeddings</h2>
+    <div id="rope" class="row" style="gap:70px">
+      <div style="width:620px;flex:none"><svg class="rope-svg" viewBox="0 0 600 560"></svg></div>
+      <div class="col" style="display:flex;flex-direction:column;gap:28px">
+        <p class="body">Each pair of q/k dimensions is rotated by an angle proportional to the token's position. After rotation, <b>q·k depends only on the distance m − n</b>, not on where the pair sits in the sequence.</p>
+        <div class="rope-ctrl">
+          <span>query pos <b>m</b></span><input id="rope-m" type="range" min="0" max="64" value="5"><output for="rope-m"></output>
+          <span>key pos <b>n</b></span><input id="rope-n" type="range" min="0" max="64" value="2"><output for="rope-n"></output>
+          <span>dim pair <b>i</b></span><input id="rope-i" type="range" min="0" max="31" value="2"><output for="rope-i"></output>
+        </div>
+        <div style="display:flex;gap:18px;align-items:center"><button class="btn primary rope-shift">Shift both +12 →</button><span class="small">Watch the dot product stay the same</span></div>
+        <div class="card" style="padding:24px 30px"><div class="rope-read"></div></div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Drag m and n: the relative angle changes. Then click "shift both": the two arrows spin, but the angle between them and the cosine stay fixed. That's the relative-position property.</p>
+    <p>Higher dim pairs (larger i) rotate more slowly, from 1 rad/token at i=0 down to ~1e-4 rad/token. Fast pairs encode local order and slow pairs long range. No learned parameters.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 9. GQA ═════════════════════════ -->
+<section class="slide white" data-title="Grouped-query attention">
+  <div class="inner" id="gqa">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end">
+      <div><span class="eyebrow">Interactive · KV-cache calculator</span><h2 style="margin-bottom:20px">Grouped-query attention</h2></div>
+      <div class="seg" style="margin-bottom:30px"><button data-kv="32">MHA · 32 KV</button><button data-kv="8">GQA · 8 KV</button><button data-kv="1">MQA · 1 KV</button></div>
+    </div>
+    <div class="gqa-lbl">32 query heads</div>
+    <div class="gqa-heads gqa-q-row"></div>
+    <svg class="gqa-links" preserveAspectRatio="none"></svg>
+    <div class="gqa-heads gqa-kv-row"></div>
+    <div class="gqa-lbl" style="display:flex;justify-content:space-between"><span>key / value heads</span><span class="gqa-pertok" style="color:var(--pink)"></span></div>
+    <p class="body gqa-desc" style="margin:14px 0 24px"></p>
+    <div class="row" style="gap:70px">
+      <div style="width:620px;flex:none" class="rope-ctrl">
+        <span>context</span><input id="gqa-ctx" type="range" min="512" max="4096" step="512" value="4096"><output for="gqa-ctx"></output>
+        <span>batch</span><input id="gqa-bs" type="range" min="1" max="64" value="8"><output for="gqa-bs"></output>
+      </div>
+      <div class="col" style="display:grid;grid-template-columns:130px 1fr 150px;gap:14px 20px;align-items:center;font:600 22px var(--body)">
+        <span>MHA</span><div class="meter m-mha"><span></span></div><span class="v-mha mono"></span>
+        <span style="color:var(--violet)">GQA (ours)</span><div class="meter m-gqa"><span></span></div><span class="v-gqa mono"></span>
+        <span>MQA</span><div class="meter m-mqa"><span></span></div><span class="v-mqa mono"></span>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>At inference, every generated token needs K and V for all previous tokens in all 32 layers: that's the KV cache. With MHA at 4k context and batch 8 it's 8 GB, more than the weights (3 GB in bf16).</p>
+    <p>GQA with 8 KV heads cuts it 4×. MQA goes all the way to 1 head but hurts quality. LLaMA-2-70B, Mistral and friends all use GQA.</p>
+    <p>Formula: 2 (K,V) × layers × kv_heads × head_dim × tokens × batch × 2 bytes.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 10. DIVIDER: DATA ═════════════════════════ -->
+<section class="slide dark bg-waves divider" data-title="Part 2 · Data & tokenizer">
+  <div class="inner center">
+    <div class="partno">Part 02</div>
+    <h1>Data &amp; tokenizer</h1>
+    <p class="lead" style="margin-top:30px">A model is only as good as the tokens it sees, and you want to tokenize them exactly once.</p>
+  </div>
+</section>
+
+<!-- ═════════════════════════ 11. PIPELINE ═════════════════════════ -->
+<section class="slide soft" data-title="Data pipeline">
+  <div class="inner">
+    <span class="eyebrow">src/data.py</span>
+    <h2>Training never tokenizes</h2>
+    <div class="flow" style="margin-top:30px">
+      <div class="fnode step"><span class="ico">{ sources }</span><h4>Sources</h4><p>HF streaming, text dirs, JSONL. The base run used <b>Project Gutenberg</b> books.</p></div>
+      <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#6042FF" stroke-width="3" fill="none"/></svg></div>
+      <div class="fnode step"><span class="ico">BPE 32k</span><h4>Tokenizer</h4><p>Byte-level BPE with byte fallback: no unknown tokens, ever.</p></div>
+      <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#893FFF" stroke-width="3" fill="none"/></svg></div>
+      <div class="fnode step"><span class="ico">sha256(…)</span><h4>Fingerprint</h4><p>Tokenizer + source files + params. Change any of them and the data rebuilds.</p></div>
+      <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#C545CC" stroke-width="3" fill="none"/></svg></div>
+      <div class="fnode step"><span class="ico">uint16 .bin</span><h4>Shards</h4><p>100M-token binary shards + <code>val.bin</code> (every 200th doc) + <code>manifest.json</code></p></div>
+      <div class="arrow step"><svg viewBox="0 0 50 24"><path d="M0 12h42M34 4l10 8-10 8" stroke="#FF4B9B" stroke-width="3" fill="none"/></svg></div>
+      <div class="fnode step"><span class="ico">Drive ☁</span><h4>Cache</h4><p><code>tokenized/&lt;fingerprint&gt;/</code> on Google Drive, so a new Colab VM downloads instead of re-tokenizing</p></div>
+    </div>
+    <div class="grid3 step" style="margin-top:60px">
+      <div class="callout"><b>uint16 is enough:</b> vocab 32,000 &lt; 65,536, so each token takes 2 bytes and gets memory-mapped straight into batches.</div>
+      <div class="callout"><b>Cheap to check:</b> the manifest + shard sizes are verified before any training step. A stale cache can't sneak in.</div>
+      <div class="callout"><b>Colab-proof:</b> VMs die. Tokenizing billions of tokens again costs hours; downloading shards takes minutes.</div>
+    </div>
+  </div>
+  <aside class="notes"><p>The core design rule: <code>src.train</code> only ever calls <code>create_dataloader(data_dir)</code>. All the expensive, failure-prone work happens once, gets fingerprinted and is cached.</p><p>Pre-tokenized datasets from other sources can be pulled by folder (<code>fetch_prebuilt_dataset</code>). That path only checks the tokenizer hash.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 12. TOKENIZER + PER-TOKEN LOSS ═════════════════════════ -->
+<section class="slide white" data-title="Tokenizer">
+  <div class="inner">
+    <span class="eyebrow">src/tokenizer.py</span>
+    <h2>What the model actually sees</h2>
+    <div class="row" style="gap:60px">
+      <div class="col">
+        <p class="body">“The United States Bill of Rights” is 6 tokens, not 32 characters. <code>Ġ</code> marks a leading space, so <code>ĠUnited</code> and <code>United</code> are <b>different tokens</b>.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin:18px 0 34px">
+          <span class="tag">&lt;|bos|&gt;</span><span class="tag">&lt;|eos|&gt;</span><span class="tag">&lt;|pad|&gt;</span>
+          <span class="tag" style="background:rgba(255,75,155,.12);color:#d81b72">&lt;|im_start|&gt;</span><span class="tag" style="background:rgba(255,75,155,.12);color:#d81b72">&lt;|im_end|&gt;</span>
+        </div>
+        <ul class="bul">
+          <li>32k vocabulary trained on a 50k-document sample</li>
+          <li>Byte fallback: emoji, Cyrillic and code all encode, with no <code>&lt;unk&gt;</code></li>
+          <li>ChatML markers reserved from day one, used later for chat</li>
+        </ul>
+      </div>
+      <div style="width:900px;flex:none">
+        <div class="chart-card"><img src="assets/img/token_loss.png" alt="Per-token cross-entropy loss"></div>
+        <div class="callout" style="margin-top:30px">Per-token loss on the Bill of Rights. <b>Dark red = surprise.</b> “ĠTen”, “Pass”, “R|at|ified” are hard; “ĠStates” after “ĠUnited” and “Ġof” are nearly free. Loss is concentrated on the <b>first token of new information</b>.</div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Tokenization is where a lot of "LLM weirdness" comes from: counting letters, spacing, numbers split into odd chunks ("Ġ17" + "91"). Point at the heatmap. Once the model has committed to "United", "States" costs almost nothing.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 13. EMBEDDINGS 3D ═════════════════════════ -->
+<section class="slide dark bg-dim" data-title="Embedding space">
+  <div class="inner" style="top:130px">
+    <span class="eyebrow">Interactive · drag to rotate, hover for tokens</span>
+    <h2 style="margin-bottom:10px">The embedding space</h2>
+    <p class="small" style="max-width:1100px;font-size:24px">The 1,000 most frequent tokens, projected from 2048-D to 3-D with PCA. Nobody told the model what a digit or a comma is.</p>
+    <div id="emb" style="position:absolute;left:0;right:0;top:190px;bottom:0">
+      <div id="emb-plot" style="right:400px"></div>
+      <div class="emb-legend"></div>
+    </div>
+  </div>
+  <aside class="notes"><p>Rotate it. Digits form their own cluster, and so does punctuation. Whole words (with leading space) and word pieces separate along one principal axis: the model learned "is this the start of a word?" as a major direction.</p><p>Only 3 of 2048 dimensions are shown, so this is a shadow of the real geometry, but the structure is already clear.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 14. DIVIDER: TRAINING ═════════════════════════ -->
+<section class="slide dark bg-waves divider" data-title="Part 3 · Training">
+  <div class="inner center">
+    <div class="partno">Part 03</div>
+    <h1>Training</h1>
+    <p class="lead" style="margin-top:30px">Where most of the engineering, and most of the money, goes.</p>
+  </div>
+</section>
+
+<!-- ═════════════════════════ LIVE 2: TRAIN TINY ═════════════════════════ -->
+<section class="slide dark bg-dim" data-title="Live: train a tiny LLM">
+  <div class="inner" id="live-train">
+    <span class="live-badge"><i></i>Live demo 2</span>
+    <h2 style="margin-top:18px">Let's train a tiny LLM, right now</h2>
+    <div class="row" style="gap:60px">
+      <div style="width:820px;flex:none">
+        <pre class="code" style="font-size:24px"><span class="c"># LLM_proto.ipynb · the one config cell</span>
+MODEL_SIZE  = <span class="s">"tiny"</span>   <span class="c"># 6 × 512</span>
+RESUME_FROM = <span class="s">""</span>       <span class="c"># random weights</span>
+N_STEPS     = …        <span class="c"># fits the talk</span></pre>
+        <div class="grid3" style="margin-top:28px;gap:20px">
+          <div class="card" style="padding:22px 24px"><div class="num" style="font-size:72px">35.3M</div><p class="small" style="margin:6px 0 0">parameters, 43× fewer</p></div>
+          <div class="card" style="padding:22px 24px"><div class="num" style="font-size:72px">6</div><p class="small" style="margin:6px 0 0">blocks of d = 512</p></div>
+          <div class="card" style="padding:22px 24px"><div class="num" style="font-size:72px">10.37</div><p class="small" style="margin:6px 0 0">starting loss = ln 32,000</p></div>
+        </div>
+      </div>
+      <div class="col">
+        <h3>What to watch</h3>
+        <ul class="bul">
+          <li class="step"><b>Loss starts at ~10.4</b>: a random model is a uniform guess over 32,000 tokens</li>
+          <li class="step"><b>First big drop:</b> it learns token frequencies (“the”, “,”, “of”)</li>
+          <li class="step"><b>Then a slow slide</b> as it picks up pairs, grammar and names</li>
+          <li class="step"><b>Grad norm</b> settles after warm-up; <b>tokens/s</b> stays flat</li>
+        </ul>
+        <div style="display:flex;gap:18px;align-items:center;margin-top:26px">
+          <button class="btn primary lt-start">▶ Mark training start</button>
+          <span class="lt-status small" style="font-size:24px"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p><b>Switch to Colab.</b> Run LLM_proto.ipynb with MODEL_SIZE = "tiny" and RESUME_FROM = "". Once the first loss line prints, come back and press “Mark training start”. The check-in slide at the start of Part 4 shows how long it has been running.</p>
+    <p>Leave it training while we go through the engineering behind the big run.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ PIPELINE: HOW IT FITS TOGETHER ═════════════════════════ -->
+<section class="slide white" data-title="How the pipeline fits together">
+  <div class="inner" style="top:130px">
+    <span class="eyebrow">What just happened when I pressed Run</span>
+    <h2 style="font-size:88px;margin-bottom:22px">GitHub + Drive + Colab</h2>
+    <div id="pipe" class="pipe">
+      <svg class="pipe-svg" viewBox="0 0 1680 700" preserveAspectRatio="none">
+        <defs><marker id="pa" markerWidth="18" markerHeight="18" refX="14" refY="9" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L18,9 L0,18 z" fill="context-stroke"/></marker></defs>
+        <g class="pipe-edges"></g>
+      </svg>
+
+      <div class="pnode" data-n="gh" style="left:0;top:0;width:370px;height:170px">
+        <div class="ph"><span class="pico">⌥</span>GitHub</div>
+        <div class="pm">VlSePr/LLM-Proto</div>
+        <div class="pl"><code>src/</code> · 3 notebooks · tests<br><code>tokenizer_data/</code> 2.2 MB</div>
+      </div>
+      <div class="pnode" data-n="hf" style="left:0;top:262px;width:370px;height:170px">
+        <div class="ph"><span class="pico">🤗</span>HuggingFace Hub</div>
+        <div class="pm">sedthh/gutenberg_english</div>
+        <div class="pl">chat: smoltalk · dolly<br>ultrachat · alpaca</div>
+      </div>
+      <div class="pnode" data-n="ws" style="left:0;top:524px;width:370px;height:170px">
+        <div class="ph"><span class="pico">⌨</span>Workstation · CPU</div>
+        <div class="pm">tokenizer + shards, once</div>
+        <div class="pl">~6 s CPU test suite<br>no GPU needed</div>
+      </div>
+
+      <div class="pnode big" data-n="colab" style="left:600px;top:150px;width:480px;height:400px">
+        <div class="ph"><span class="pico">▶</span>Google Colab · G4</div>
+        <div class="pm">~96 GB Blackwell · <b>ephemeral VM</b></div>
+        <div class="pchips">
+          <span><code>LLM_proto.ipynb</code> train</span>
+          <span><code>LLM-inference.ipynb</code> serve</span>
+          <span>local SSD: shard copy</span>
+          <span>bf16 · 14.8k tok/s</span>
+        </div>
+      </div>
+
+      <div class="pnode drive" data-n="drive" style="left:1290px;top:0;width:390px;height:470px">
+        <div class="ph"><span class="pico">☁</span>Google Drive</div>
+        <div class="pm">MyDrive/LLM · the only disk that survives</div>
+        <div class="ptree">
+          <div>📁 Gutenberg/1224b392…/<small>56 shards · 5.5B tok · 11 GB</small></div>
+          <div>📁 chat shards/<small>0.98B tok · 2 GB</small></div>
+          <div>📁 large-20260917-155937/</div>
+          <div class="in">step_N.pt · latest.pt · best.pt<small>≈18 GB each</small></div>
+          <div class="in">outputs/ · metrics_history.json</div>
+        </div>
+      </div>
+      <div class="pnode aud" data-n="aud" style="left:1290px;top:560px;width:390px;height:134px">
+        <div class="ph"><span class="pico">☺</span>You, the audience</div>
+        <div class="pl"><code>*.gradio.live</code> share link · queued requests</div>
+      </div>
+
+      <div class="pipe-caption"><b class="pc-n"></b><span class="pc-t"></span></div>
+      <i class="step pstep"></i><i class="step pstep"></i><i class="step pstep"></i><i class="step pstep"></i>
+      <i class="step pstep"></i><i class="step pstep"></i><i class="step pstep"></i>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Press → to walk through the seven stages; each one lights up its arrow. Clicking a numbered circle jumps to that stage.</p>
+    <ol><li>Code and the tokenizer come from GitHub (<code>git clone</code> in the notebook's first cell).</li>
+    <li>Data is tokenized <b>once</b> (here on the workstation) and uploaded to Drive with a manifest and fingerprint.</li>
+    <li>Colab mounts Drive and copies the shards to the VM's local disk; memory-mapped reads from Drive would be far too slow.</li>
+    <li>Training on the GPU.</li>
+    <li>Every 500 steps: an atomic checkpoint plus a Drive upload.</li>
+    <li>When the VM dies, a new one clones, mounts, and resumes from latest.pt on the exact next batch.</li>
+    <li>Inference: LLM-inference.ipynb loads a checkpoint from Drive and shares a Gradio link, which is the chat the audience has been using since the start.</li></ol>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 15. TRAINING LOOP ═════════════════════════ -->
+<section class="slide white" data-title="The training loop">
+  <div class="inner">
+    <span class="eyebrow">src/train.py</span>
+    <h2>The training loop</h2>
+    <div class="grid4">
+      <div><div class="colnum">01</div><h3>Optimizer</h3><p class="body" style="font-size:25px">AdamW, β = (0.9, 0.95). <b>Two param groups</b>: no weight decay on norms, biases and 1-D params. Gradient clip 1.0.</p></div>
+      <div><div class="colnum">02</div><h3>Schedule</h3><p class="body" style="font-size:25px">Linear warm-up, then cosine decay to <code>min_lr</code> (10% of peak). Warm-up keeps early, poorly-directed updates small.</p></div>
+      <div><div class="colnum">03</div><h3>Precision</h3><p class="body" style="font-size:25px"><code>precision: auto</code> → bf16 on Ampere+ (and on our Blackwell), fp16 + GradScaler on older GPUs, fp32 on CPU.</p></div>
+      <div><div class="colnum">04</div><h3>Speed</h3><p class="body" style="font-size:25px"><code>torch.compile</code> on CUDA (auto-off on Colab), flash SDPA, gradient accumulation. Gradient checkpointing must go in <b>before</b> compile.</p></div>
+    </div>
+    <pre class="code step" style="margin-top:44px"><span class="k">for</span> step <span class="k">in</span> <span class="t">range</span>(start_step, max_steps):          <span class="c"># start_step = ckpt["step"] + 1</span>
+    lr = get_lr(step, warmup, max_steps, peak_lr, min_lr)
+    <span class="k">for</span> micro <span class="k">in</span> <span class="t">range</span>(grad_accum):                 <span class="c"># 12 × 10 sequences per optimizer step</span>
+        loss = model(x, targets=y)[<span class="s">"loss"</span>] / grad_accum   <span class="c"># + aux_loss_coeff · aux_loss for MoE</span>
+        scaler.scale(loss).backward()
+    clip_grad_norm_(params, <span class="t">1.0</span>); scaler.step(opt); opt.zero_grad(set_to_none=<span class="k">True</span>)</pre>
+  </div>
+  <aside class="notes"><p>Nothing here is novel. The point is that every piece is visible and testable: 6 seconds of CPU tests cover resume, OOM replay, schedules and MoE.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 16. EXACT RESUME ═════════════════════════ -->
+<section class="slide soft" data-title="Exact resume">
+  <div class="inner">
+    <span class="eyebrow">Colab will kill your VM</span>
+    <h2>Exactly-resumable training</h2>
+    <div class="card" style="margin:10px 0 40px;padding:34px 50px 20px">
+      <div class="tl">
+        <div class="track"></div>
+        <div class="tick ck" style="left:5%"></div><div class="lab up" style="left:5%">step_500.pt</div><div class="lab" style="left:5%">500</div>
+        <div class="tick ck" style="left:30%"></div><div class="lab up" style="left:30%">step_1000.pt</div><div class="lab" style="left:30%">1000</div>
+        <div class="tick" style="left:48%"></div><div class="lab" style="left:48%">1321</div>
+        <div class="tick boom" style="left:52%"></div><div class="lab up" style="left:52%;color:#e0336f">💥 VM preempted</div>
+        <div class="tick ck step fade" style="left:74%"></div><div class="lab up step fade" style="left:74%">--resume latest → step 1001</div><div class="lab step fade" style="left:74%">same batches, same RNG</div>
+      </div>
+    </div>
+    <div class="grid3">
+      <div class="card"><h3>What's saved</h3><p>Model, optimizer, GradScaler, <b>all RNG states</b> (Python / NumPy / torch / CUDA), epoch, <code>batches_in_epoch</code>, tokens seen, best val loss, both configs.</p></div>
+      <div class="card"><h3>Deterministic data</h3><p>Sample order is a pure function of <b>(seed, epoch, worker layout)</b>. On resume, <code>skip_batches</code> fast-forwards the index stream without reading any data.</p></div>
+      <div class="card"><h3>Safe on disk</h3><p>Atomic write (tmp + <code>os.replace</code>), copy to <code>latest.pt</code> / <code>best.pt</code>, prune to N, then a best-effort upload to Drive.</p></div>
+    </div>
+  </div>
+  <aside class="notes"><p>A checkpoint's <code>step</code> is the <b>last completed</b> step, so resume starts at step+1. There's a test that trains N steps straight through, then N/2 + interrupt + resume, and asserts the two runs have identical weights.</p><p>Weights are saved without the <code>_orig_mod.</code> prefix that torch.compile adds.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 17. OOM REPLAY ═════════════════════════ -->
+<section class="slide white" data-title="OOM replay">
+  <div class="inner">
+    <span class="eyebrow">Interactive · never lose a step to OOM</span>
+    <h2>OOM? Replay the step, shorter</h2>
+    <div class="row" id="oom" style="gap:80px;margin-top:10px">
+      <div class="col">
+        <div class="oom"></div>
+        <button class="btn oom-run" style="margin-top:30px">↻ Replay</button>
+      </div>
+      <div style="width:620px;flex:none">
+        <ul class="bul">
+          <li>All micro-batches of a step are <b>held</b>, so the whole step can be retried</li>
+          <li>On <code>OutOfMemoryError</code>: free the cache and cut the sequence cap by <b>25%</b></li>
+          <li>Floor at <code>min_seq_len</code> (256). Below that it's a real bug, so it raises</li>
+          <li>The optimizer only steps once a full replay succeeds, so updates are never half-applied</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Memory spikes are data-dependent (activation memory, allocator fragmentation). Instead of crashing at 3 a.m., the trainer shrinks the sequence cap: 4096 → 3072 → 2304 → …</p></aside>
+</section>
+
+<!-- ═════════════════════════ RESOURCES ═════════════════════════ -->
+<section class="slide grad" data-title="What it takes">
+  <div class="inner" style="top:140px">
+    <span class="eyebrow" style="-webkit-text-fill-color:#fff">The real deal: resources</span>
+    <h2 style="color:#fff;margin-bottom:26px">What it takes</h2>
+    <div class="row" style="gap:36px;align-items:stretch">
+      <div class="card res-card" style="width:960px;flex:none;padding:26px 34px">
+        <table class="res">
+          <thead><tr><th></th><th>Tiny <span class="live-chip">live</span></th><th>Large · 1.5B</th></tr></thead>
+          <tbody>
+            <tr><td>Parameters</td><td>35.3M</td><td>1,508.5M</td></tr>
+            <tr><td>Weights for inference (bf16)</td><td>≈ 71 MB</td><td>≈ 3.0 GB</td></tr>
+            <tr><td>Checkpoint (fp32 weights + AdamW)</td><td>≈ 0.42 GB</td><td>≈ 18 GB</td></tr>
+            <tr><td>GPU</td><td>any Colab GPU</td><td>G4 · ~96 GB VRAM</td></tr>
+            <tr><td>Tokens per optimizer step</td><td>set live</td><td>491,520 <small>12 × 10 × 4096</small></td></tr>
+            <tr><td>Time per step @ 14.8k tok/s</td><td>seconds</td><td>≈ 33 s</td></tr>
+            <tr><td>Steps so far</td><td>this talk</td><td>24,000</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="col" style="display:flex;flex-direction:column;gap:22px">
+        <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">5.5B</div><div class="lbl">pretraining tokens · 11 GB</div><div class="sub">Gutenberg, 56 shards of 100M</div></div>
+        <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">1.22M</div><div class="lbl">chat conversations · 2 GB</div><div class="sub">0.98B tokens, 0.72B of them learned (loss-masked)</div></div>
+        <div class="stat" style="padding:24px 30px"><div class="num" style="font-size:84px">~$120</div><div class="lbl">Colab compute so far</div><div class="sub">Drive: ~13 GB data + ~18 GB per kept checkpoint</div></div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Checkpoint sizes are arithmetic: fp32 weights (4 bytes/param) + AdamW's two moment buffers (8 bytes/param) ≈ 12 bytes × params. Inference only needs the bf16 weights (2 bytes/param).</p>
+    <p>Tokens/step and time/step use the current notebook settings (batch 12 × accumulation 10 × 4096 context). Earlier segments of the run may have used different settings, so treat the step time as indicative.</p>
+    <p>Data numbers come from the manifests: Gutenberg 5.50B train + 24.5M val tokens; the chat mix is 1,218,948 conversations, 980M tokens, 722M of them assistant tokens that carry loss.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 19. LOSS CURVES ═════════════════════════ -->
+<section class="slide white" data-title="Loss curves">
+  <div class="inner">
+    <span class="eyebrow">Last 1,500 steps of the run</span>
+    <h2>Is it still learning?</h2>
+    <div class="chart-card"><img src="assets/img/loss_curves.png" alt="Train and validation loss and perplexity"></div>
+    <div class="grid3" style="margin-top:44px">
+      <div class="callout step"><b>Train loss is noisy</b> (1.75 – 2.32). Each point is one batch, and some text is simply easier. Don't read tea leaves in it.</div>
+      <div class="callout step"><b>Validation keeps falling:</b> 1.911 → <b>1.881</b>, perplexity 6.76 → <b>6.56</b>, even at the tail of the cosine schedule.</div>
+      <div class="callout step"><b>Not converged.</b> A still-sloping val curve at min LR means more tokens would help more than more steps.</div>
+    </div>
+  </div>
+  <aside class="notes"><p>The val curve is the only one to trust. The bump around step 23,650 is within eval noise (10 eval batches). The model is under-trained by Chinchilla standards (~20 tokens per parameter ≈ 30B tokens for 1.5B).</p></aside>
+</section>
+
+<!-- ═════════════════════════ 20. TRAINING HEALTH ═════════════════════════ -->
+<section class="slide white" data-title="Training health">
+  <div class="inner">
+    <span class="eyebrow">What a healthy run looks like</span>
+    <h2>Training health</h2>
+    <div class="chart-card"><img src="assets/img/training_health.png" alt="LR, grad norm, tokens per second"></div>
+    <div class="grid3" style="margin-top:40px">
+      <div class="callout"><b>Learning rate:</b> the cosine lands smoothly on <code>min_lr</code> = 6e-5 at step 24,000.</div>
+      <div class="callout"><b>Gradient norm</b> stays at ~0.2 with rare spikes to 0.43, well under the clip at 1.0. No instability.</div>
+      <div class="callout"><b>Throughput</b> is flat at 14,780 – 14,800 tok/s. The data loader is never the bottleneck.</div>
+    </div>
+  </div>
+  <aside class="notes"><p>These three are the first things I look at when a run misbehaves. A growing grad norm, or throughput that saw-tooths (loader starvation), shows up here long before the loss tells you.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 21. INSIDE: ATTENTION ═════════════════════════ -->
+<section class="slide white" data-title="Inside the model: attention">
+  <div class="inner" style="top:130px">
+    <div class="row" style="gap:70px;height:100%">
+      <div style="width:900px;flex:none;height:100%;display:flex;align-items:center"><div class="chart-card" style="width:900px"><img src="assets/img/attention_L0_H0.png" alt="Attention map layer 0 head 0"></div></div>
+      <div class="col center">
+        <span class="eyebrow">Layer 0 · head 0</span>
+        <h2 style="font-size:90px">Where does it look?</h2>
+        <ul class="bul">
+          <li><b>Causal:</b> the upper triangle is zero, so no peeking at the future</li>
+          <li><b>Attention sink:</b> early tokens soak up a lot of attention. <code>&lt;|bos|&gt;</code> works as a “nothing to attend to” slot</li>
+          <li>Layer 0 is mostly a <b>uniform average of the recent past</b>. Sharp, content-specific heads live deeper</li>
+          <li>Faint vertical stripes on <code>.</code> and newlines: punctuation carries “where am I in the text” information</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Attention sinks are a known phenomenon (Xiao et al. 2023, StreamingLLM). Softmax has to put probability somewhere, and the first token becomes the default dump.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 22. INSIDE: ACTIVATIONS & WEIGHTS ═════════════════════════ -->
+<section class="slide white" data-title="Inside the model: activations">
+  <div class="inner">
+    <span class="eyebrow">32 layers deep</span>
+    <h2>The residual stream grows</h2>
+    <div class="row" style="gap:30px;align-items:flex-start">
+      <div class="chart-card" style="width:1010px;flex:none"><img src="assets/img/activation_stats.png" alt="Activation mean and std per layer"></div>
+      <div class="chart-card" style="flex:1;padding:12px"><img src="assets/img/weight_distributions.png" alt="Weight std by layer"></div>
+    </div>
+    <div class="grid3" style="margin-top:40px">
+      <div class="callout"><b>Activation std: 3 → 24.</b> Every block <i>adds</i> to the stream, and pre-norm lets it grow without destabilising the next layer.</div>
+      <div class="callout"><b>Late layers write louder:</b> <code>wo</code>, <code>wv</code> and FFN weights grow with depth, while <code>ffn_norm</code> gains shrink to compensate.</div>
+      <div class="callout"><b>Layer 0 is special:</b> outlier <code>wk</code> and tiny <code>attn_norm</code>, since it works on raw embeddings.</div>
+    </div>
+  </div>
+  <aside class="notes"><p>This is the "health check" for a deep network: no dead layers (std ≈ 0), no explosions. The steady growth is expected with pre-norm residual architectures.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 23. DIVIDER: TALK ═════════════════════════ -->
+<section class="slide dark bg-waves divider" data-title="Part 4 · Making it talk">
+  <div class="inner center">
+    <div class="partno">Part 04</div>
+    <h1>Making it talk</h1>
+    <p class="lead" style="margin-top:30px">A language model predicts one token. Everything else is a decoding loop.</p>
+  </div>
+</section>
+
+<!-- ═════════════════════════ LIVE CHECK-IN: TINY ═════════════════════════ -->
+<section class="slide soft" data-title="Check-in: the tiny model">
+  <div class="inner" id="checkin">
+    <span class="live-badge light"><i></i>Live check-in</span>
+    <h2 style="margin-top:18px">How is our tiny model doing?</h2>
+    <div class="row" style="gap:60px;align-items:stretch">
+      <div style="width:520px;flex:none;display:flex;flex-direction:column;gap:24px">
+        <div class="stat"><div class="num ci-elapsed" style="font-size:110px">–</div><div class="lbl">training on stage</div></div>
+        <div class="stat">
+          <div class="lbl" style="margin:0 0 14px">Current loss from the notebook</div>
+          <input class="ci-loss" type="number" step="0.01" min="0.5" max="11" placeholder="e.g. 4.2">
+          <div class="sub ci-ppl" style="margin-top:14px;font-size:22px"></div>
+        </div>
+      </div>
+      <div class="col" style="display:flex;flex-direction:column;justify-content:center;gap:30px">
+        <div class="lscale">
+          <div class="lscale-track"></div>
+          <div class="lmark" style="--x:0"><b>10.37</b><span>random: 1 in 32,000</span></div>
+          <div class="lmark tiny" hidden><b class="ci-mark">–</b><span>tiny, live</span></div>
+          <div class="lmark big"><b>1.88</b><span>1.5B after 24k steps</span></div>
+        </div>
+        <p class="body">Loss is a log scale. Every <b>−0.69</b> halves the number of tokens the model is still choosing between. Going from 10.4 to 4 is the easy part; 4 to 1.9 is where the GPU money goes.</p>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Read the latest loss off the notebook and type it into the box. The marker shows where tiny sits between random guessing and the big model. Optionally run a quick generation from tiny's latest checkpoint and compare it with what the audience got from the 1.5B.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 24. SAMPLING PLAYGROUND ═════════════════════════ -->
+<section class="slide white" data-title="Sampling playground">
+  <div class="inner" style="top:130px">
+    <div id="samp" class="samp">
+      <div class="samp-ctrl">
+        <div><span class="eyebrow">Interactive · decoding</span><h2 style="font-size:88px;margin-bottom:6px">Sampling playground</h2>
+          <p class="small" style="font-size:22px">“The cat sat on the …” Click a token to mark it as already generated (<span style="text-decoration:underline wavy #FF7701">wavy</span>).</p></div>
+        <div><label>Temperature <output for="s-t"></output></label><input id="s-t" type="range" min="0.1" max="2" step="0.05" value="0.8"></div>
+        <div><label>Top-k <output for="s-k"></output></label><input id="s-k" type="range" min="1" max="12" step="1" value="12"></div>
+        <div><label>Top-p (nucleus) <output for="s-p"></output></label><input id="s-p" type="range" min="0.1" max="1" step="0.01" value="0.9"></div>
+        <div><label>Repetition penalty <output for="s-r"></output></label><input id="s-r" type="range" min="1" max="3" step="0.05" value="1.5"></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" data-preset="greedy">Greedy</button><button class="btn" data-preset="ours">Our chat</button>
+          <button class="btn" data-preset="strict">Rep 2.0</button><button class="btn" data-preset="chaos">Chaos</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:22px">
+        <div class="samp-bars"></div>
+        <div style="display:flex;gap:16px;align-items:center">
+          <button class="btn primary s-one">Sample 1</button><button class="btn s-many">Sample ×100</button>
+          <span class="small" style="margin-left:auto">live tokens <b class="samp-live"></b> · entropy <b class="samp-ent"></b></span>
+        </div>
+        <div class="samp-out"><span class="ctx">The cat sat on the</span> …</div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Same order as <code>model.generate</code>: repetition penalty → temperature → top-k → top-p → sample.</p>
+    <p>Demo: Greedy always says "mat". Chaos lets "spaceship" through. Then show the repetition penalty: click "mat" and "floor" to mark them as already generated, and watch "sofa" take over. Raising the penalty pushes them down further. At 2.0+ the model is <i>forced</i> away from its best guesses. That's exactly the glued-words failure we'll see in a minute.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 25. BASE MODEL SPEAKS VICTORIAN ═════════════════════════ -->
+<section class="slide blob" data-title="The base model">
+  <div class="inner">
+    <span class="eyebrow">Base model · pre-trained on Project Gutenberg</span>
+    <h2>It speaks fluent 19th century</h2>
+    <div class="grid3" style="margin-top:10px">
+      <div class="fail-card step"><div class="q">You: “someone who runs meetings confidently and explains nothing correctly”</div><div class="a">“…and then makes a lot of noise. Somebody else gives you the same information, too; but when I get down to telling how people are running business…”</div><div class="why">Grammatical, period-perfect and on-topic-ish. It learned <b>style</b> first.</div></div>
+      <div class="fail-card step"><div class="q">You: “Imagine a metaphor about fire”</div><div class="a">“A great deal has happened lately within ten miles <mark class="hl-pg">[Pg 211]</mark>of us which must certainly happen somewhere outside New Haven!”</div><div class="why">Page markers from scanned books. <b>The data leaks through verbatim.</b></div></div>
+      <div class="fail-card step"><div class="q">You: “We didnt start the fire…”</div><div class="a">“The flames shook from roof over chimney over town again for fear somebody'd burn his pile stovepipe away inside. We thought ourselves lucky we hadna done somethink foolish…”</div><div class="why">Dialect spellings (<i>hadna</i>, <i>somethink</i>) straight out of Victorian novels.</div></div>
+    </div>
+    <p class="lead step" style="margin-top:44px;font-size:34px">A base model doesn't answer questions. It <b>continues documents</b>. Ask it anything and it writes the next page of a Gutenberg book.</p>
+  </div>
+  <aside class="notes"><p>This is the most important conceptual slide of part 4. Pre-training gives you a document-continuation engine with the "voice" of its corpus. It has never seen a question followed by an answer, so it doesn't know that's what we want.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 27. CHAT FINE-TUNING ═════════════════════════ -->
+<section class="slide white" data-title="Chat fine-tuning">
+  <div class="inner">
+    <span class="eyebrow">src/corpus.py · src/generate.py</span>
+    <h2>Teaching it to take turns</h2>
+    <div class="row" style="gap:60px">
+      <div style="width:880px;flex:none">
+        <pre class="code"><span class="k">&lt;|im_start|&gt;</span>user
+Is gravity a force?<span class="k">&lt;|im_end|&gt;</span>
+<span class="k">&lt;|im_start|&gt;</span>assistant
+<span class="s">In general relativity, gravity is not a force
+but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span>   <span class="c">← stop token</span></pre>
+        <p class="small" style="margin-top:18px;font-size:22px"><code>corpus.format_chat_pair</code> wraps every instruction/answer row. The model learns where an answer <b>ends</b>.</p>
+      </div>
+      <div class="col">
+        <ul class="bul">
+          <li class="step"><b>Clean, then wrap.</b> The corpus cleaner strips any <code>&lt;|…|&gt;</code> text, so it must run per field <i>before</i> the markers are added</li>
+          <li class="step"><b>Two stop ids:</b> <code>&lt;|eos|&gt;</code> and <code>&lt;|im_end|&gt;</code></li>
+          <li class="step"><b>Trim role leaks.</b> If the model starts writing a fake “user” line, cut the reply there and never feed it back into history</li>
+          <li class="step"><b>Windowed repetition penalty</b> (last 512 tokens), so long chats don't slowly ban the whole vocabulary</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Supervised fine-tuning doesn't add much knowledge. It teaches <b>format</b>: who's speaking, when to stop, markdown lists, "Certainly!". Our chat outputs show exactly that. The form is right and the content is still 1.5B-parameter mush.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 26. PROMPT EXPLORER ═════════════════════════ -->
+<section class="slide soft" data-title="Prompt explorer">
+  <div class="inner" style="top:120px;bottom:100px">
+    <div id="px" class="px">
+      <div style="display:flex;flex-direction:column;min-height:0">
+        <span class="eyebrow">What you probably saw · recorded in rehearsal</span>
+        <div class="px-list"></div>
+      </div>
+      <div class="px-main">
+        <div class="px-prompt"></div>
+        <div class="px-bar"><button class="btn px-replay">▶ Replay</button><div class="px-legend"></div><span class="small" style="margin-left:auto">T 0.8 · top-k 50 · top-p 0.9 · 256 tokens</span></div>
+        <div class="px-cols"></div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>Three columns, same prompts, same sampling except the repetition penalty. Good ones to click: "We didnt start the fire" (chat writes poetry), "Sunny weather on Mars" (base glues words), "Mediocrity knows nothing…" (ALL CAPS drift), "someone who runs meetings…" (chat invents user/assistant turns).</p>
+    <p><b>Honesty note:</b> the chat column was one continuous session, so the history carried over. Several answers continue the <i>previous</i> topic (e.g. "once upon a time" → women's suffrage). These transcripts were recorded before <code>clean_generated_text</code> learned to trim leaked turns.</p>
+  </aside>
+</section>
+
+<!-- ═════════════════════════ 28. FAILURE GALLERY ═════════════════════════ -->
+<section class="slide white" data-title="Failure gallery">
+  <div class="inner" style="top:130px">
+    <span class="eyebrow">The real deal · failure gallery</span>
+    <h2 style="font-size:92px;margin-bottom:26px">Every failure has a mechanism</h2>
+    <div class="grid3" style="gap:26px">
+      <div class="fail-card"><div class="q">Base · “Sunny weather on Mars”</div><div class="a" style="word-break:break-all">“<mark class="hl-glue">Nocturalspellingsattenuisbledropssionvibrationdisturbances…</mark>”</div><div class="why"><b>Repetition penalty × tokenizer.</b> Once the common <code>Ġword</code> tokens have been used and penalised, space-less word pieces win, and the words glue together.</div></div>
+      <div class="fail-card"><div class="q">Base · “Mediocrity knows nothing higher…”</div><div class="a">“<mark class="hl-caps">WHAT DO PEACE QUANDAP KNOX SAKE? WHICH WAITS ME GREATED “GODS”…</mark>”</div><div class="why"><b>Mode lock-in.</b> One capitalised token makes the next one likelier, and there's no way back without a document boundary.</div></div>
+      <div class="fail-card"><div class="q">Chat · “someone who runs meetings…”</div><div class="a">“…far-reaching consequences for everyone involved.<br><mark class="hl-role">user</mark><br>Can you add some examples…?”</div><div class="why"><b>Invented turns.</b> The model plays <i>both</i> sides of the dialogue. It learned the format better than where to stop.</div></div>
+      <div class="fail-card"><div class="q">Chat · “Genetic diseas”</div><div class="a">“Asia is already facing huge environmental disasters as cities struggle to cope with rising temperatures…”</div><div class="why"><b>Context bleed.</b> A long shared history plus a 1.5B model means the previous topic wins over a typo'd prompt.</div></div>
+      <div class="fail-card"><div class="q">Base · “Genetic diseas”</div><div class="a">“Most doctors prescribe pills containing arsenic plus potassium cyanide to cure stomach cancer…”</div><div class="why"><b>Confident nonsense.</b> Fluency is not truth. A small model imitates the <i>tone</i> of medical text.</div></div>
+      <div class="fail-card"><div class="q">Chat · “We didnt start the fire…”</div><div class="a">“The sky became black again, another day left undone that never ended / And as I stood up to speak my truth to the gods alone…”</div><div class="why"><b>…and sometimes it's lovely.</b> Song-lyric cadence, line breaks, a consistent mood. Not bad for 1.5B.</div></div>
+    </div>
+  </div>
+  <aside class="notes"><p>The point of this slide: none of these are mysterious "AI hallucinations". Each maps to a concrete mechanism we've seen in this talk: the tokenizer, sampling, the training data, the chat format, context.</p><p>The glued-words explanation is our best hypothesis. It shows up with repetition penalty ≥ 1.5 on long generations.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 30. MOE GRAFT ═════════════════════════ -->
+<section class="slide white" data-title="Bonus: experts">
+  <div class="inner">
+    <span class="eyebrow">Bonus · src/moe.py</span>
+    <h2>Next step: grafting experts</h2>
+    <div class="row" style="gap:50px">
+      <svg class="moe-fig" viewBox="0 0 1000 540" style="width:1000px;flex:none">
+        <defs>
+          <linearGradient id="mg" x1="0" x2="1"><stop offset="0" stop-color="#6042FF"/><stop offset=".6" stop-color="#FF4B9B"/><stop offset="1" stop-color="#FF7701"/></linearGradient>
+          <marker id="ma" markerWidth="16" markerHeight="16" refX="12" refY="8" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L16,8 L0,16 z" fill="#8a80b0"/></marker>
+        </defs>
+        <!-- dense -->
+        <text x="130" y="40" text-anchor="middle" font-family="Bebas Neue" font-size="40" fill="#222">Dense block</text>
+        <rect x="40" y="70" width="180" height="70" rx="14" fill="#f5f2ff" stroke="#9d8bff" stroke-width="3"/><text x="130" y="114" text-anchor="middle" font-size="24" font-family="Source Sans 3" font-weight="600">RMSNorm</text>
+        <rect x="40" y="200" width="180" height="120" rx="14" fill="#fff0f7" stroke="#FF4B9B" stroke-width="3"/><text x="130" y="255" text-anchor="middle" font-size="26" font-family="Source Sans 3" font-weight="700">SwiGLU FFN</text><text x="130" y="288" text-anchor="middle" font-size="19" font-family="JetBrains Mono" fill="#777">34.6M</text>
+        <line x1="130" y1="140" x2="130" y2="196" stroke="#8a80b0" stroke-width="3" marker-end="url(#ma)"/>
+        <line x1="130" y1="320" x2="130" y2="380" stroke="#8a80b0" stroke-width="3" marker-end="url(#ma)"/>
+        <text x="130" y="420" text-anchor="middle" font-size="24" font-family="Source Sans 3" fill="#555">+ residual</text>
+        <!-- arrow -->
+        <path d="M260 260 H340" stroke="#6042FF" stroke-width="8"/><path d="M336 244 L366 260 L336 276 z" fill="#FF4B9B"/>
+        <text x="305" y="240" text-anchor="middle" font-family="Bebas Neue" font-size="30" fill="#6042FF">graft</text>
+        <!-- moe -->
+        <text x="680" y="40" text-anchor="middle" font-family="Bebas Neue" font-size="40" fill="#222">MoE block (layers 24–31)</text>
+        <rect x="590" y="70" width="180" height="70" rx="14" fill="#f5f2ff" stroke="#9d8bff" stroke-width="3"/><text x="680" y="114" text-anchor="middle" font-size="24" font-family="Source Sans 3" font-weight="600">RMSNorm</text>
+        <rect x="520" y="180" width="320" height="64" rx="32" fill="url(#mg)"/><text x="680" y="220" text-anchor="middle" font-size="23" font-family="Source Sans 3" font-weight="700" fill="#fff">Router · softmax · top-k</text>
+        <line x1="680" y1="140" x2="680" y2="176" stroke="#8a80b0" stroke-width="3" marker-end="url(#ma)"/>
+        <g font-family="Source Sans 3" font-size="21" font-weight="700" text-anchor="middle">
+          <rect x="400" y="300" width="150" height="100" rx="14" fill="#fff0f7" stroke="#FF4B9B" stroke-width="3"/><text x="475" y="345">Expert 0</text><text x="475" y="375" font-size="16" font-family="JetBrains Mono" font-weight="400" fill="#777">= old FFN</text>
+          <rect x="570" y="300" width="150" height="100" rx="14" fill="#fff0f7" stroke="#FF4B9B" stroke-width="3"/><text x="645" y="345">Expert 1</text><text x="645" y="375" font-size="16" font-family="JetBrains Mono" font-weight="400" fill="#777">copy of FFN</text>
+          <rect x="740" y="300" width="150" height="100" rx="14" fill="#fff" stroke="#FF7701" stroke-width="3" stroke-dasharray="10 8"/><text x="815" y="345" fill="#FF7701">Expert 2</text><text x="815" y="375" font-size="16" font-family="JetBrains Mono" font-weight="400" fill="#FF7701">grown later</text>
+        </g>
+        <path d="M640 244 C 560 270, 480 270, 475 296" stroke="#6042FF" stroke-width="5" fill="none" marker-end="url(#ma)"/>
+        <path d="M680 244 C 660 270, 650 270, 645 296" stroke="#C545CC" stroke-width="3" fill="none" opacity=".6" marker-end="url(#ma)"/>
+        <path d="M720 244 C 800 270, 812 270, 815 296" stroke="#FF7701" stroke-width="2" fill="none" stroke-dasharray="6 6" marker-end="url(#ma)"/>
+        <text x="645" y="450" text-anchor="middle" font-size="22" font-family="Source Sans 3" fill="#555">Σ weights · expert(x) &nbsp;→ + residual</text>
+        <text x="645" y="500" text-anchor="middle" font-size="20" font-family="JetBrains Mono" fill="#6042FF">aux = n · Σ fᵢ·Pᵢ  (load balance)</text>
+      </svg>
+      <div class="col center">
+        <ul class="bul">
+          <li><b>After</b> pre-training: swap the FFN in layers 24–31 for a router + experts</li>
+          <li><b>Warm start:</b> each expert begins as a copy of the dense FFN, so the output is unchanged at graft time</li>
+          <li>Freeze the rest, fine-tune on a domain (we used Dark Souls / Elden Ring lore), then <b>grow</b> one expert per round</li>
+          <li>Parameters grow with the number of experts, but compute per token stays at top-k FFNs: the Mixtral / DeepSeek idea</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes"><p>Only a mention today, about 1 minute. MoE is how Mixtral, DeepSeek and friends scale: parameters grow with the number of experts, but compute per token stays at top_k FFNs. We do it post-hoc: take the dense 1.5B, swap in <code>SparseMoE</code> in the last 8 layers, and fine-tune on a domain.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 32. LESSONS ═════════════════════════ -->
+<section class="slide white" data-title="Lessons learned">
+  <div class="inner">
+    <span class="eyebrow">If you do this yourself</span>
+    <h2>Lessons learned</h2>
+    <div class="grid4" style="margin-top:20px">
+      <div class="step"><div class="colnum">01</div><h3>Data is the model</h3><p class="body" style="font-size:25px">Gutenberg in, Victorian out. Page markers, dialect and ALL CAPS all came from the corpus. Curate before you scale.</p></div>
+      <div class="step"><div class="colnum">02</div><h3>Plumbing &gt; math</h3><p class="body" style="font-size:25px"><code>model.py</code> is ~550 lines out of ~6,500. Resume, caching, OOM replay and Drive sync are the rest, and they're what saved the budget.</p></div>
+      <div class="step"><div class="colnum">03</div><h3>Decoding matters</h3><p class="body" style="font-size:25px">The same weights produce poetry or glued gibberish depending on four sliders. Test sampling settings like code.</p></div>
+      <div class="step"><div class="colnum">04</div><h3>Format ≠ knowledge</h3><p class="body" style="font-size:25px">Fine-tuning taught turns and markdown, not facts. At 1.5B parameters, fluency comes long before truth.</p></div>
+    </div>
+    <div class="step" style="margin-top:90px;border-top:3px solid var(--ink);padding-top:40px;display:flex;align-items:baseline;gap:40px">
+      <span class="quote" style="font-size:88px">Build one once.</span>
+      <span class="lead" style="font-size:36px">You'll never read an LLM's output the same way again.</span>
+    </div>
+  </div>
+  <aside class="notes"><p>The fourth lesson is the one most relevant to people building products on LLMs: the polish of the output is not evidence of correctness.</p></aside>
+</section>
+
+<!-- ═════════════════════════ 33. WHAT'S NEXT ═════════════════════════ -->
+<section class="slide grad" data-title="What's next">
+  <div class="inner">
+    <span class="eyebrow" style="-webkit-text-fill-color:#fff">Roadmap</span>
+    <h2 style="color:#fff">What's next</h2>
+    <div class="grid3" style="margin-top:10px">
+      <div class="card"><h3>Better data</h3><p>Mix FineWeb-Edu with the books, dedupe, filter scan artefacts, and aim for Chinchilla-scale tokens (~30B).</p></div>
+      <div class="card"><h3>Real chat SFT</h3><p>A proper instruction set in ChatML, with evaluation on held-out prompts instead of vibes.</p></div>
+      <div class="card"><h3>Measure the experts</h3><p>Domain perplexity before/after each growth round, expert load and forgetting on general text.</p></div>
+    </div>
+    <p class="lead" style="color:#fff;margin-top:60px">All code: tokenizer, data pipeline, trainer, MoE and these notebooks. <b style="color:#fff">~6 s of CPU tests</b> keep it honest.</p>
+  </div>
+</section>
+
+<!-- ═════════════════════════ 34. THANK YOU ═════════════════════════ -->
+<section class="slide dark bg-bottom" data-title="Thank you">
+  <div class="inner" style="top:200px">
+    <div class="thanks">THANK YOU!</div>
+    <div style="height:2px;background:linear-gradient(90deg,rgba(255,255,255,.8),transparent);width:1200px;margin:10px 0 50px"></div>
+    <p class="lead">Questions? The chat link stays open, so keep making the model misbehave.</p>
+  </div>
+  <aside class="notes"><p>For Q&amp;A: the Gradio link is still up, and the sampling playground and prompt explorer are good to go back to. Press O for the overview grid.</p></aside>
+</section>
+
+</div>
+
+<div id="progress"></div>
+<div id="hud">
+  <button data-act="prev">◀</button><button data-act="next">▶</button>
+  <button data-act="ov">Overview (O)</button><button data-act="notes">Notes (S)</button><button data-act="fs">Fullscreen (F)</button><button data-act="help">?</button>
+</div>
+<div id="help"><div class="box">
+  <h4>Keyboard</h4>
+  <div><kbd>→ / Space</kbd>next step / slide</div>
+  <div><kbd>←</kbd>previous</div>
+  <div><kbd>O</kbd>overview grid (click a slide to jump)</div>
+  <div><kbd>S</kbd>speaker notes + timer window</div>
+  <div><kbd>F</kbd>fullscreen</div>
+  <div><kbd>Home / End</kbd>first / last slide</div>
+</div></div>
+
+<script src="assets/data/prompts.js"></script>
+<script src="assets/data/embeddings.js"></script>
+<script src="assets/vendor/plotly.min.js"></script>
+<script src="assets/vendor/qrcode.js"></script>
+<script src="assets/vendor/three.min.js"></script>
+<script src="deck.js?v=30"></script>
+<script src="widgets.js?v=30"></script>
+<script src="model3d.js?v=4"></script>
+</body>
+</html>
