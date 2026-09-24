@@ -124,11 +124,20 @@ Notebook outputs are stripped on commit via `.gitattributes` (`nbstripout --inst
 - `src/corpus.py` has two cleaners on purpose: `strip_special_token_text` (only `<|name|>`; used by
   `generate.clean_generated_text`, must keep code and inequalities) and `clean_corpus_text` (training data:
   Llama-3 assistant span, `<s>..</s>`, tag-shaped bare tags, whitespace). `build_finetune_corpus` ends in
-  `ensure_tokenized_data`, so the corpus is cached like any other source.
+  `ensure_tokenized_data`, so the corpus is cached like any other source. Pass `chat_roles=(user_field,
+  assistant_field)` to wrap each row in the same `<|im_start|>`/`<|im_end|>` ChatML turns
+  `generate.ChatSession` builds its prompts with (`corpus.format_chat_pair`) instead of a flat field
+  join — cleaning runs per-field *before* wrapping (`clean_corpus_text` would otherwise strip the
+  markers it just added). A checkpoint only learns to use those markers once it's been fine-tuned on a
+  corpus built this way.
 
 ### Tokenizer (`src/tokenizer.py`)
 - HuggingFace `tokenizers` BPE with byte fallback. Special tokens `<|bos|> <|eos|> <|pad|>
-  <|im_start|> <|im_end|>` (the last two are ChatML markers for later chat fine-tuning). The trained
+  <|im_start|> <|im_end|>` — the last two are real ChatML turn markers: `generate.ChatSession` wraps
+  every turn in them (`<|im_start|>user\n...<|im_end|><|im_start|>assistant\n...<|im_end|>`) and treats
+  `<|im_end|>` as an extra generation stop id alongside `<|eos|>`, but no checkpoint has ever been
+  *trained* on that structure unless its fine-tune corpus used `corpus.build_finetune_corpus(...,
+  chat_roles=...)` — until then they're an untrained structural cue, not a learned one. The trained
   `tokenizer_data/tokenizer.json` is committed. Training validates `tokenizer.vocab_size <=
   model_config.vocab_size`.
 
@@ -147,6 +156,12 @@ Everything a notebook used to inline now has a home: `utils.default_num_workers`
 `utils.resolve_checkpoint_path` (download-if-missing), `tokenizer.ensure_tokenizer` (local → Drive → train),
 `data.resolve_sources` / `ensure_tokenized_data_from_config`, `gdrive.describe_drive_setup`,
 `generate.ChatSession` + `chat_widget`, `visualize.plot_training_curves` / `plot_expert_load`.
+`ChatSession.reply` only ever stores the *cleaned* answer back into its history, never the model's raw
+output — `generate.clean_generated_text` trims a hallucinated continuation the moment the model starts
+free-associating a fake next turn (bare `user`/`assistant`/`system` line), so that never gets fed back
+as if it were real conversation. `repetition_penalty` there is windowed (`ChatSession.
+repetition_penalty_window`, default 512 tokens via `model.generate`'s `repetition_penalty_window`) so it
+doesn't keep suppressing more of the vocabulary as a chat gets longer.
 
 `LLM_proto.ipynb` is laid out as Part A Setup (install-if-missing, **one** config cell holding every setting,
 environment + Drive) → B Prepare (tokenizer, data, model/dataloader check) → C Train (`report.run_summary` plan +

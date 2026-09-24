@@ -11,6 +11,19 @@ shards with the regular data pipeline.
         bins_dir="data/custom/bins",
     )
 
+Pass ``chat_roles=("instruction", "output")`` to wrap each row in ``<|im_start|>``/
+``<|im_end|>`` ChatML turns instead of a flat field join, so a checkpoint fine-tuned on the
+result actually learns the same turn-boundary markers ``generate.ChatSession`` builds its
+prompts with:
+
+    build_finetune_corpus(
+        [{"name": "ArenaRune/EldenRingQA", "fields": ["instruction", "output"]}],
+        jsonl_path="data/custom/jsonl/chat_corpus.jsonl",
+        tokenizer_path="tokenizer_data",
+        bins_dir="data/custom/bins",
+        chat_roles=("instruction", "output"),
+    )
+
 Two different cleaners live in this project on purpose:
 
 * ``strip_special_token_text`` removes only ``<|name|>`` markup. ``generate.clean_generated_text``
@@ -73,6 +86,16 @@ def clean_corpus_text(text: str, *, strip_bare_tags: bool = True, collapse_white
     return text.strip()
 
 
+def format_chat_pair(user_text: str, assistant_text: str) -> str:
+    """Wrap one instruction/output pair in ChatML turns matching ``generate.ChatSession``.
+
+    Call this on already-``clean_corpus_text``-cleaned text: ``clean_corpus_text`` strips
+    any ``<|name|>`` markup (including these markers), so cleaning must happen *before*
+    wrapping, never after.
+    """
+    return f"<|im_start|>user\n{user_text}<|im_end|>\n<|im_start|>assistant\n{assistant_text}<|im_end|>"
+
+
 def extract_text(row: dict[str, Any], fields: Sequence[str] | None = None, *, join: str = "\n",
                  min_chars: int = 20) -> str:
     """Pull the training text out of one dataset row.
@@ -92,12 +115,17 @@ def extract_text(row: dict[str, Any], fields: Sequence[str] | None = None, *, jo
 
 
 def collect_hf_texts(datasets: Iterable[str | dict[str, Any]], *, split: str = "train",
-                     min_chars: int = 20) -> list[str]:
+                     min_chars: int = 20, chat_roles: tuple[str, str] | None = None) -> list[str]:
     """Download HuggingFace datasets and return their texts (best effort per dataset).
 
     Each entry is a dataset id (``"SantaBot/dark-souls-lore"``) or a dict with ``name`` and
     optional ``subset``, ``split`` and ``fields`` (see ``extract_text``). A dataset that
     fails to load is reported and skipped so one bad id does not abort the corpus.
+
+    With ``chat_roles=(user_field, assistant_field)``, each row's two named columns are
+    cleaned individually and wrapped with ``format_chat_pair`` instead of joined by
+    ``extract_text`` -- rows missing either field (after cleaning) are dropped. This
+    replaces, rather than composes with, per-entry ``fields``.
     """
     from datasets import load_dataset
 
@@ -108,8 +136,17 @@ def collect_hf_texts(datasets: Iterable[str | dict[str, Any]], *, split: str = "
         print(f"Loading {name} ...")
         try:
             ds = load_dataset(name, spec.get("subset"), split=spec.get("split", split))
-            rows = [extract_text(r, spec.get("fields"), min_chars=min_chars) for r in ds]
-            rows = [t.strip() for t in rows if t and len(t.strip()) > min_chars]
+            if chat_roles:
+                user_field, assistant_field = chat_roles
+                rows = []
+                for r in ds:
+                    user_text = clean_corpus_text(str(r.get(user_field, "")).strip())
+                    assistant_text = clean_corpus_text(str(r.get(assistant_field, "")).strip())
+                    if len(user_text) > min_chars and len(assistant_text) > min_chars:
+                        rows.append(format_chat_pair(user_text, assistant_text))
+            else:
+                rows = [extract_text(r, spec.get("fields"), min_chars=min_chars) for r in ds]
+                rows = [t.strip() for t in rows if t and len(t.strip()) > min_chars]
             texts.extend(rows)
             print(f"  collected {len(rows):,} samples (total {len(texts):,})")
         except Exception as e:
@@ -142,19 +179,29 @@ def build_finetune_corpus(
     preview: int = 8,
     force: bool = False,
     seed: int = 0,
+    chat_roles: tuple[str, str] | None = None,
 ) -> str:
     """Collect, clean, write JSONL and tokenize a fine-tuning corpus; returns ``bins_dir``.
 
-    ``texts`` bypasses the HuggingFace download (tests, local corpora). Tokenization goes
+    ``texts`` bypasses the HuggingFace download (tests, local corpora) -- and, with it,
+    ``chat_roles``, since that option needs per-row dataset dict access. Tokenization goes
     through ``data.ensure_tokenized_data``, so a manifest is written and an unchanged
     corpus is a cache hit. Note the shard builder skips documents shorter than 50
     characters, the same rule as every other source.
+
+    ``chat_roles=(user_field, assistant_field)`` wraps each row in ChatML turns (see
+    ``format_chat_pair``) instead of the plain field join. Those rows are already cleaned
+    per-field by ``collect_hf_texts``, so the generic ``clean`` pass below -- which would
+    strip the ``<|im_start|>``/``<|im_end|>`` markers it just added -- is skipped for them.
     """
     from .data import ensure_tokenized_data
 
-    rows = list(texts) if texts is not None else collect_hf_texts(datasets, min_chars=min_chars)
+    rows = (
+        list(texts) if texts is not None
+        else collect_hf_texts(datasets, min_chars=min_chars, chat_roles=chat_roles)
+    )
     print(f"Total samples collected: {len(rows):,}")
-    if clean:
+    if clean and not chat_roles:
         rows = [clean_corpus_text(t) for t in rows]
         rows = [t for t in rows if len(t) > min_chars]
         print(f"After cleanup: {len(rows):,}")

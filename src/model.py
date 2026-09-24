@@ -5,6 +5,7 @@ Fully parameterized by ModelConfig — same code for 30M to 1B+.
 """
 
 import math
+from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
@@ -398,6 +399,8 @@ class TransformerLM(nn.Module):
         eos_token_id: int | None = None,
         repetition_penalty: float = 1.0,
         pad_token_id: int | None = None,
+        extra_stop_ids: Iterable[int] | None = None,
+        repetition_penalty_window: int | None = None,
     ) -> torch.Tensor:
         """
         Autoregressive generation with KV-cache, temperature, top-k, top-p sampling,
@@ -408,9 +411,15 @@ class TransformerLM(nn.Module):
           is returned unchanged.
         - With ``eos_token_id`` set, each row stops independently; finished rows are
           padded with ``pad_token_id`` (defaults to ``eos_token_id``) until every row
-          has finished or the budget is exhausted.
+          has finished or the budget is exhausted. ``extra_stop_ids`` are additional
+          per-token stop conditions (e.g. a chat-template turn-end marker) that behave
+          the same way but don't change the pad default.
         - ``repetition_penalty`` > 1.0 penalizes tokens already present in the sequence
           (HuggingFace convention: positive logits are divided, negative multiplied).
+          By default the penalty looks at the whole sequence generated so far;
+          ``repetition_penalty_window`` bounds that lookback to the last N tokens, so the
+          penalty doesn't keep distorting more and more of the vocabulary as the sequence
+          (e.g. an accumulating multi-turn chat history) grows.
         """
         was_training = self.training
         self.eval()
@@ -420,8 +429,14 @@ class TransformerLM(nn.Module):
             if max_new_tokens <= 0:
                 return input_ids
 
+            extra_stop_tensor = None
+            if extra_stop_ids:
+                extra_stop_tensor = torch.tensor(list(extra_stop_ids), dtype=torch.long, device=input_ids.device)
+
             if pad_token_id is None:
                 pad_token_id = eos_token_id
+            if pad_token_id is None and extra_stop_tensor is not None:
+                pad_token_id = int(extra_stop_tensor[0])
 
             kv_cache = None
             generated = input_ids
@@ -439,12 +454,15 @@ class TransformerLM(nn.Module):
                 logits = out["logits"][:, -1, :].float()  # (B, vocab_size)
 
                 if repetition_penalty != 1.0:
-                    # Penalize every token that already appears in the sequence.
-                    prev_scores = torch.gather(logits, 1, generated)
+                    # Penalize every token that already appears in the (optionally windowed) sequence.
+                    penalty_context = generated
+                    if repetition_penalty_window is not None:
+                        penalty_context = generated[:, -repetition_penalty_window:]
+                    prev_scores = torch.gather(logits, 1, penalty_context)
                     prev_scores = torch.where(
                         prev_scores < 0, prev_scores * repetition_penalty, prev_scores / repetition_penalty
                     )
-                    logits = logits.scatter(1, generated, prev_scores)
+                    logits = logits.scatter(1, penalty_context, prev_scores)
 
                 # Temperature controls randomness: <1 = more deterministic, >1 = more creative.
                 # It scales logits before softmax: lower temp → sharper distribution → less surprise.
@@ -478,16 +496,20 @@ class TransformerLM(nn.Module):
                     # Greedy
                     next_token = logits.argmax(dim=-1, keepdim=True)
 
-                if eos_token_id is not None:
+                stopping = eos_token_id is not None or extra_stop_tensor is not None
+                if stopping:
                     # Rows that already finished keep emitting the pad token.
                     next_token = torch.where(
                         finished.unsqueeze(1), torch.full_like(next_token, pad_token_id), next_token
                     )
-                    finished |= next_token.squeeze(1) == eos_token_id
+                    if eos_token_id is not None:
+                        finished |= next_token.squeeze(1) == eos_token_id
+                    if extra_stop_tensor is not None:
+                        finished |= torch.isin(next_token.squeeze(1), extra_stop_tensor)
 
                 generated = torch.cat([generated, next_token], dim=1)
 
-                if eos_token_id is not None and bool(finished.all()):
+                if stopping and bool(finished.all()):
                     break
 
             return generated

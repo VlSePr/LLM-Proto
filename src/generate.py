@@ -4,12 +4,22 @@ Supports single-prompt and multi-turn chat modes.
 Uses KV-cache for efficient autoregressive generation.
 """
 
+import re
+
 import torch
 
 from .corpus import strip_special_token_text
 from .model import TransformerLM
 from .tokenizer import LLMTokenizer
 from .utils import build_model_from_checkpoint, get_device, warn_if_tokenizer_mismatch
+
+# A model with no learned chat-template turn boundary will sometimes, past the real
+# answer, free-associate a fabricated continuation shaped like the next turn (bare role
+# words, not real <|im_start|>/<|im_end|> tokens -- those are already gone by the time this
+# runs). Cut the text there so a hallucinated turn never reaches the user or gets stored
+# back into ChatSession history. Only matches on its own line so ordinary prose mentioning
+# "the user" or "as an assistant" is untouched.
+ROLE_LEAK_RE = re.compile(r"\n\s*(?:user|assistant|system)\s*\n", re.IGNORECASE)
 
 
 def clean_generated_text(text: str) -> str:
@@ -19,8 +29,16 @@ def clean_generated_text(text: str) -> str:
     this is a safety net for models that learned to emit the *text* of chat-template
     tokens (e.g. ``<|eot_id|>``). Ordinary angle brackets, pipes and code are untouched
     (the training-data cleaner in ``src/corpus.py`` is deliberately more aggressive).
+
+    Also truncates at the first sign of a hallucinated new turn (see ``ROLE_LEAK_RE``) --
+    a model with no trained turn-boundary signal can ramble past its real answer into a
+    fabricated ``user``/``assistant`` continuation.
     """
-    return strip_special_token_text(text).strip()
+    text = strip_special_token_text(text)
+    m = ROLE_LEAK_RE.search(text)
+    if m:
+        text = text[: m.start()]
+    return text.strip()
 
 
 def load_model_for_inference(
@@ -57,6 +75,8 @@ def generate_ids(
     top_p: float = 0.9,
     device: torch.device | None = None,
     repetition_penalty: float = 1.0,
+    extra_stop_ids: set[int] | None = None,
+    repetition_penalty_window: int | None = None,
 ) -> list[int]:
     """Generate continuation token IDs for ``prompt_ids`` (prompt not included)."""
     if device is None:
@@ -80,6 +100,8 @@ def generate_ids(
             top_p=top_p,
             eos_token_id=tokenizer.eos_id,
             repetition_penalty=repetition_penalty,
+            extra_stop_ids=extra_stop_ids,
+            repetition_penalty_window=repetition_penalty_window,
         )
     return output_ids[0, len(prompt_ids):].tolist()
 
@@ -113,10 +135,16 @@ def generate_text(
 class ChatSession:
     """Multi-turn chat state: a rolling token history plus the sampling settings.
 
-    Shared by the terminal ``interactive_chat`` and notebook widgets. Each ``reply``
-    feeds BOS + history + the new prompt to the model, appends prompt and answer to
-    the history, and truncates the history from the left so it always fits the
-    model's context window together with ``max_new_tokens``.
+    Shared by the terminal ``interactive_chat`` and notebook widgets. Each turn is wrapped
+    in ChatML markers (``<|im_start|>user ... <|im_end|><|im_start|>assistant ...
+    <|im_end|>``) so the model gets a consistent, structural turn-boundary cue even though
+    (unless the checkpoint was fine-tuned with ``corpus.build_finetune_corpus(...,
+    chat_roles=...)``) it never learned one. ``reply`` feeds BOS + history + the new turn
+    to the model, generation stops at ``<|eos|>`` or ``<|im_end|>``, and only the
+    *cleaned* answer (hallucinated continuations trimmed by ``clean_generated_text``) is
+    appended to history -- never the model's raw output -- so a rambling turn can't poison
+    later turns. History is then truncated from the left so it always fits the model's
+    context window together with ``max_new_tokens``.
     """
 
     def __init__(
@@ -129,6 +157,7 @@ class ChatSession:
         top_k: int = 50,
         top_p: float = 0.9,
         repetition_penalty: float = 1.0,
+        repetition_penalty_window: int = 512,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -137,6 +166,7 @@ class ChatSession:
         self.top_k = top_k
         self.top_p = top_p
         self.repetition_penalty = repetition_penalty
+        self.repetition_penalty_window = repetition_penalty_window
         self.device = next(model.parameters()).device
         self.history: list[int] = []
         self.turns: list[tuple[str, str]] = []
@@ -151,16 +181,24 @@ class ChatSession:
 
     def reply(self, prompt: str) -> str:
         """Generate the model's answer to ``prompt`` in the context of the conversation so far."""
-        turn_ids = self.tokenizer.encode(prompt + "\n", add_bos=False)
-        context_ids = [self.tokenizer.bos_id] + self.history + turn_ids
-        new_ids = generate_ids(
-            self.model, self.tokenizer, context_ids,
+        tok = self.tokenizer
+        im_start, im_end = tok.im_start_id, tok.im_end_id
+        user_span = tok.encode(f"user\n{prompt}", add_bos=False)
+        assistant_span = tok.encode("assistant\n", add_bos=False)
+        turn_ids = [im_start] + user_span + [im_end] + [im_start] + assistant_span
+        context_ids = [tok.bos_id] + self.history + turn_ids
+
+        stop_ids = {i for i in (tok.eos_id, im_end) if i is not None}
+        raw_new_ids = generate_ids(
+            self.model, tok, context_ids,
             max_new_tokens=self.max_new_tokens, temperature=self.temperature,
             top_k=self.top_k, top_p=self.top_p, repetition_penalty=self.repetition_penalty,
-            device=self.device,
+            repetition_penalty_window=self.repetition_penalty_window,
+            extra_stop_ids=stop_ids or None, device=self.device,
         )
-        self.history = (self.history + turn_ids + new_ids)[-self.max_history:]
-        response = clean_generated_text(self.tokenizer.decode(new_ids, skip_special=True))
+        response = clean_generated_text(tok.decode(raw_new_ids, skip_special=True))
+        clean_new_ids = tok.encode(response, add_bos=False) + [im_end]
+        self.history = (self.history + turn_ids + clean_new_ids)[-self.max_history:]
         self.turns.append((prompt, response))
         return response
 
