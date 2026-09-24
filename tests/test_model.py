@@ -96,6 +96,43 @@ def test_repetition_penalty_discourages_repeats(tiny_cfg, seed):
     assert not (penalized[0, 4:] == tok).all()
 
 
+def test_generate_stops_on_extra_stop_ids(tiny_cfg, seed):
+    """`extra_stop_ids` behaves like `eos_token_id` (per-row stop, pad-fill) without needing one."""
+    model = TransformerLM(tiny_cfg).eval()
+    stop = 5
+    with torch.no_grad():
+        model.output.weight[stop] += 100.0
+    prompt = torch.randint(2, tiny_cfg.vocab_size, (3, 4))
+    out = model.generate(prompt, max_new_tokens=10, temperature=0.0, extra_stop_ids={stop})
+    assert out.shape == (3, 5)  # stopped after the first extra-stop token for all rows
+    assert (out[:, -1] == stop).all()
+
+
+def test_repetition_penalty_window_ignores_tokens_outside_window(tiny_cfg, seed):
+    import dataclasses
+
+    # tie_embeddings=False: biasing the output row for `special` below must not also
+    # perturb its input embedding, since `special` is itself fed in as a prompt token.
+    cfg = dataclasses.replace(tiny_cfg, tie_embeddings=False)
+    model = TransformerLM(cfg).eval()
+    special, filler = 9, 3
+    with torch.no_grad():
+        model.output.weight[special] += 10.0  # `special` is the strong global argmax
+    prompt = torch.tensor([[special, filler, filler, filler, filler]], dtype=torch.long)
+
+    # Full-context penalty: `special` sits in position 0 of the sequence, so it gets
+    # penalized away even though it would otherwise be the argmax.
+    full_context = model.generate(prompt, max_new_tokens=1, temperature=0.0, repetition_penalty=1e6)
+    assert full_context[0, -1] != special
+
+    # Windowed penalty covering only the last 4 tokens excludes position 0 -> `special`
+    # is never seen by the penalty and stays the argmax.
+    windowed = model.generate(
+        prompt, max_new_tokens=1, temperature=0.0, repetition_penalty=1e6, repetition_penalty_window=4,
+    )
+    assert windowed[0, -1] == special
+
+
 def test_generate_restores_train_mode(tiny_cfg):
     model = TransformerLM(tiny_cfg).train()
     model.generate(torch.zeros(1, 3, dtype=torch.long), max_new_tokens=2)

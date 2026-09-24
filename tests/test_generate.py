@@ -70,6 +70,37 @@ def test_chat_session_keeps_bounded_history(tiny_cfg, tokenizer, seed):
     assert session.history == [] and session.turns == []
 
 
+def test_chat_session_turns_use_chatml_markers(tiny_cfg, tokenizer, seed):
+    model = TransformerLM(tiny_cfg).eval()
+    session = ChatSession(model, tokenizer, max_new_tokens=8, temperature=0.0)
+    session.reply("hello there")
+    im_start, im_end = tokenizer.im_start_id, tokenizer.im_end_id
+    assert im_start is not None and im_end is not None
+    # Two turn-openers (user, assistant) and the stored answer is closed by im_end.
+    assert session.history.count(im_start) == 2
+    assert session.history[-1] == im_end
+    # "user\n" / "assistant\n" immediately follow each opener.
+    user_prefix = tokenizer.encode("user\n", add_bos=False)
+    assistant_prefix = tokenizer.encode("assistant\n", add_bos=False)
+    first_open = session.history.index(im_start)
+    assert session.history[first_open + 1: first_open + 1 + len(user_prefix)] == user_prefix
+    second_open = session.history.index(im_start, first_open + 1)
+    assert session.history[second_open + 1: second_open + 1 + len(assistant_prefix)] == assistant_prefix
+
+
+def test_chat_session_cuts_hallucinated_continuation_before_storing(tiny_cfg, tokenizer, monkeypatch, seed):
+    model = TransformerLM(tiny_cfg).eval()
+    session = ChatSession(model, tokenizer, max_new_tokens=8, temperature=0.0)
+
+    # Force the raw generation to look like a real answer followed by a fabricated next turn.
+    fake_raw = tokenizer.encode("real answer\nuser\nfabricated follow-up", add_bos=False)
+    monkeypatch.setattr("src.generate.generate_ids", lambda *a, **k: fake_raw)
+
+    response = session.reply("hello there")
+    assert response == "real answer"
+    assert "fabricated" not in tokenizer.decode(session.history, skip_special=True)
+
+
 def test_chat_widget_drives_session(tiny_cfg, tokenizer, seed):
     pytest.importorskip("ipywidgets")
     model = TransformerLM(tiny_cfg).eval()

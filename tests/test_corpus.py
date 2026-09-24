@@ -7,7 +7,9 @@ import pytest
 from src.corpus import (
     build_finetune_corpus,
     clean_corpus_text,
+    collect_hf_texts,
     extract_text,
+    format_chat_pair,
     normalize_whitespace,
     strip_special_token_text,
     write_jsonl,
@@ -52,6 +54,55 @@ def test_extract_text_priority_and_fields():
     assert extract_text(row) == row["description"]
     assert extract_text({"a": "x", "b": 2, "c": "y"}) == "x y"
     assert extract_text({"instruction": "Q?", "output": "A.", "junk": "no"}, ["instruction", "output"]) == "Q?\nA."
+
+
+def test_format_chat_pair_wraps_in_chatml_turns():
+    out = format_chat_pair("Who are you?", "I am the Firekeeper.")
+    assert out == "<|im_start|>user\nWho are you?<|im_end|>\n<|im_start|>assistant\nI am the Firekeeper.<|im_end|>"
+
+
+def test_collect_hf_texts_chat_roles_cleans_before_wrapping(monkeypatch):
+    rows = [
+        {"instruction": "<s>Act as an NPC.</s>Who are you, traveler of the Abyss?",
+         "output": "<|start_header_id|>assistant<|end_header_id|>I am the Firekeeper of legend.<|eot_id|>"},
+        {"instruction": "tiny", "output": "also tiny"},  # dropped: below min_chars after cleaning
+    ]
+
+    def fake_load_dataset(name, subset, split):
+        return rows
+
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+    texts = collect_hf_texts(["fake/dataset"], chat_roles=("instruction", "output"))
+    assert len(texts) == 1
+    out = texts[0]
+    # Cleaning ran before wrapping: the Llama-3/system-block markup is gone, but the
+    # <|im_start|>/<|im_end|> markers this function just added are intact.
+    assert out.startswith("<|im_start|>user\n") and out.endswith("<|im_end|>")
+    assert "<s>" not in out and "<|start_header_id|>" not in out and "<|eot_id|>" not in out
+    assert "Who are you, traveler of the Abyss?" in out
+    assert "I am the Firekeeper of legend." in out
+
+
+def test_build_finetune_corpus_chat_roles_survives_cleanup_pass(monkeypatch, tmp_path, tmp_tokenizer_dir):
+    rows = [{"instruction": f"Question number {i} about the ruins?",
+             "output": f"Answer number {i} about the ruins, told at length."} for i in range(8)]
+
+    def fake_load_dataset(name, subset, split):
+        return rows
+
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+    bins = build_finetune_corpus(
+        ["fake/dataset"], jsonl_path=str(tmp_path / "jsonl" / "chat.jsonl"), tokenizer_path=tmp_tokenizer_dir,
+        bins_dir=str(tmp_path / "chat_bins"), shard_size=512, val_every=2, preview=0,
+        chat_roles=("instruction", "output"),
+    )
+    manifest = read_manifest(bins)
+    assert manifest and manifest["n_train_shards"] >= 1
+    with open(tmp_path / "jsonl" / "chat.jsonl", encoding="utf-8") as f:
+        written = [json.loads(line)["text"] for line in f]
+    assert len(written) == 8
+    assert all(r.startswith("<|im_start|>user\n") and r.endswith("<|im_end|>") for r in written)
+    assert all("<|im_start|>assistant\n" in r for r in written)
 
 
 def test_write_jsonl_round_trips_through_data_pipeline(tmp_path):
