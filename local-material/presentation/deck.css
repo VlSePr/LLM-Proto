@@ -543,3 +543,28 @@ table.credits .stage.moe { background: rgba(255,75,155,.12); color: #d81b72; }
 .link-card .qr svg { width: 100%; height: 100%; }
 .link-card .qr.soon { display: flex; align-items: center; justify-content: center; border: 3px dashed #d9d3ee; border-radius: 16px; color: var(--ink-3); font: 600 22px/1.3 var(--body); }
 .link-card .url { font: 500 17px/1.3 var(--mono); color: var(--violet); word-break: break-all; }
+
+/* ─── Tokens per parameter ─── */
+.tpp-scale { position: relative; height: 180px; margin: 0 40px 6px; }
+.tpp-track { position: absolute; left: 0; right: 0; top: 70px; height: 14px; border-radius: 7px; background: #ece8f7; }
+.tpp-track::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--fill, 0); border-radius: 7px; background: var(--grad); }
+.tpp-ticks span { position: absolute; top: 96px; transform: translateX(-50%); font: 500 18px var(--mono); color: var(--ink-3); }
+.tpp-mark { position: absolute; top: 0; transform: translateX(-50%); background: none; border: 0; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0; }
+.tpp-mark span { font: 400 40px/1 var(--display); color: var(--ink-3); }
+.tpp-mark i { order: 2; width: 34px; height: 34px; border-radius: 50%; background: #fff; border: 5px solid #b8adde; margin-top: 4px; transition: transform .2s; }
+.tpp-mark.now i { border-color: #FF4B9B; }
+.tpp-mark.goal i { border-style: dashed; }
+.tpp-mark.on span { color: var(--ink); }
+.tpp-mark.on i { background: var(--pink); border-color: var(--pink); transform: scale(1.25); }
+.tpp-card { background: #fbfaff; border: 1px solid var(--line); border-radius: 22px; padding: 22px 34px; min-height: 330px; }
+.tpp-head { display: flex; align-items: baseline; gap: 20px; margin-bottom: 14px; }
+.tpp-k { font: 700 16px/1 var(--body); letter-spacing: .2em; text-transform: uppercase; color: var(--pink); }
+.tpp-t { font: 400 46px/1 var(--display); }
+.tpp-meta { font-size: 18px; color: var(--ink-3); margin-left: auto; }
+.tpp-q { font: 600 20px/1.3 var(--body); color: var(--violet); margin-bottom: 8px; }
+.tpp-a { font: italic 400 21px/1.45 Georgia, "Times New Roman", serif; color: var(--ink); white-space: pre-line; }
+.tpp-a.empty { display: none; }
+.tpp-why { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); font-size: 22px; color: var(--ink-2); }
+
+.tpp-off { position: absolute; right: 0; top: 124px; text-align: right; font: 400 34px/1 var(--display); color: #b8adde; }
+.tpp-off small { display: inline; margin-left: 12px; font: 500 16px/1.3 var(--mono); color: var(--ink-3); margin-top: 6px; }

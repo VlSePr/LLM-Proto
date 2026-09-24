@@ -257,9 +257,9 @@
     const rows = data.rows;
     const list = $(".px-list", el);
     const COLS = [
-      { key: "base", title: "Base model", meta: "pretrained · rep 1.5" },
-      { key: "base_rp2", title: "Base, stricter", meta: "pretrained · rep 2.0" },
-      { key: "chat", title: "Chat fine-tune", meta: "ChatML SFT · rep 1.5", cls: "chat" },
+      { key: "base", title: "Base model", meta: "3–7 tok/param · rep 1.5" },
+      { key: "base_rp2", title: "Base, stricter", meta: "3–7 tok/param · rep 2.0" },
+      { key: "chat", title: "Chat fine-tune", meta: "8 tok/param + SFT", cls: "chat" },
     ];
     const HL = {
       role: { re: /(^|\n)(\s*(?:user|assistant|system)\s*)(?=\n)/g, rep: (m, a, b) => `${a}<mark class="hl-role">${b}</mark>`, label: "leaked turn", color: "#c2185b" },
@@ -439,6 +439,57 @@
       markers.forEach((m, i) => m.classList.toggle("shown", i < n));
     });
     render();
+  });
+
+
+  // ════════════════════════════════════════════════════════════
+  // 11. Tokens per parameter: stages of the 1.5B run, same prompt at each stage
+  // ════════════════════════════════════════════════════════════
+  const TPP_PROMPT = "We didnt start the fire, it was always burning since the world was turning";
+  const TPP_STAGES = [
+  {
+    "x": 3,
+    "k": "First result",
+    "t": "~3 tokens / param",
+    "meta": "≈ 4.5B tokens · FineWeb-Edu + Gutenberg",
+    "a": "",
+    "why": "Examples from the first checkpoint are coming (Early-llm-chat file)."
+  },
+  {
+    "x": 5,
+    "k": "Base checkpoints",
+    "t": "3–7 tokens / param",
+    "meta": "≈ 4.5–10.5B tokens · rep 1.5",
+    "a": "toward Asia and Africa... No. The flames shook from roof over chimney over town again for fear somebody'd burn his pile stovepipe away inside. We thought ourselves lucky we hadna done somethink foolish today. What wad yu say? One thing sure, they could put out fires without bothering neighbors by going ahead alone. As soon as I got started we wanted nobody stirring till morning in time for supper.\" He paused significantly--as …",
+    "why": "Fluent, period-perfect prose that continues a <b>document</b>: dialect spellings, no idea it was asked anything."
+  },
+  {
+    "x": 8,
+    "k": "Today's model",
+    "t": "~8 tokens / param + chat SFT",
+    "meta": "≈ 12B tokens · then 1.22M chat conversations",
+    "a": "The sky became black again, another day left undone that never ended\nAnd as I stood up to speak my truth to the gods alone\nMy hand had stayed at home, it was just not worth taking risks\nWith only four years to live on earth, let's do no harm\nBut all my life long, I've lived so many lives to come\nI'd rather face death every step of the journey / then die back down & tell the tale / no matter how hard you try\nIt’s still true to …",
+    "why": "Same prompt, now answered <b>as a turn</b>, with line breaks and a consistent mood. The chat fine-tune brings the format; the extra tokens bring fluency.",
+    "now": true
+  }
+];
+  onEnter("tpp", (el) => {
+    const MAX = 14, pos = (x) => `${(x / MAX) * 100}%`;
+    $(".tpp-ticks", el).innerHTML = [0, 2, 4, 6, 8, 10, 12].map((t) => `<span style="left:${pos(t)}">${t}</span>`).join("");
+    $(".tpp-marks", el).innerHTML = TPP_STAGES.map((st, i) =>
+      `<button class="tpp-mark${st.now ? " now" : ""}" data-i="${i}" style="left:${pos(st.x)}"><i></i><span>${st.t.split(" ")[0]}</span></button>`).join("");
+    $(".tpp-track", el).style.setProperty("--fill", pos(8));
+    const show = (i) => {
+      const st = TPP_STAGES[i];
+      el.querySelectorAll(".tpp-mark").forEach((b) => b.classList.toggle("on", +b.dataset.i === i));
+      $(".tpp-k", el).textContent = st.k; $(".tpp-t", el).textContent = st.t; $(".tpp-meta", el).textContent = st.meta;
+      $(".tpp-q", el).textContent = st.a ? `You: “${TPP_PROMPT}”` : "";
+      $(".tpp-a", el).textContent = st.a;
+      $(".tpp-a", el).classList.toggle("empty", !st.a);
+      $(".tpp-why", el).innerHTML = st.why;
+    };
+    $(".tpp-marks", el).addEventListener("click", (e) => { const b = e.target.closest(".tpp-mark"); if (b) show(+b.dataset.i); });
+    show(2);
   });
 
   // Per-browser memory for the live demos (training start time, Gradio link). Storage may be unavailable.

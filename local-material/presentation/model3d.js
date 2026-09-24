@@ -59,17 +59,27 @@
 
   let scene, camera, renderer, raycaster, pickables = [], blocks = [], topGroup, detail, detailStream, tieLine, particle, bars = [];
   let sel = null, hovered = null, spin = false, flowT = -1, running = false, inited = false;
-  const view = { theta: 0.75, phi: 1.3, r: 58, ty: 11.5 }, goal = { ...view };
+  const view = { theta: 0.75, phi: 1.3, r: 62, ty: 12.8 }, goal = { ...view };
   const BASE = (i) => 0.7 + i * 0.62, GAP = 7.6, TOP = BASE(N) + 0.2;
 
-  function label(text, { size = 0.55, color = "#ffffff", weight = 600 } = {}) {
+  // Text sprite on a dark pill so it reads against any colour; drawn on top of the geometry.
+  function label(text, { size = 0.55, color = "#ffffff", weight = 600, bg = "rgba(16,9,38,.88)", border = "rgba(255,255,255,.3)" } = {}) {
+    const lines = String(text).split("\n"), LH = 76, PX = 26, PY = 14;
     const c = document.createElement("canvas"), ctx = c.getContext("2d");
     const font = `${weight} 64px "Source Sans 3", "Segoe UI", sans-serif`;
-    ctx.font = font; const w = Math.ceil(ctx.measureText(text).width) + 24;
-    c.width = w; c.height = 88; ctx.font = font; ctx.fillStyle = color; ctx.textBaseline = "middle"; ctx.fillText(text, 12, 46);
+    ctx.font = font;
+    const w = Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) + PX * 2, h = lines.length * LH + PY * 2;
+    c.width = w; c.height = h;
+    if (bg) {
+      ctx.fillStyle = bg; ctx.strokeStyle = border; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.roundRect(1.5, 1.5, w - 3, h - 3, 26); ctx.fill(); ctx.stroke();
+    }
+    ctx.font = font; ctx.fillStyle = color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    lines.forEach((l, i) => ctx.fillText(l, w / 2, PY + LH * i + LH / 2 + 3));
     const tex = new T.CanvasTexture(c); tex.anisotropy = 4;
-    const s = new T.Sprite(new T.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-    s.scale.set((size * w) / 88, size, 1);
+    const s = new T.Sprite(new T.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+    s.renderOrder = 10;
+    s.scale.set((size * w) / LH, (size * h) / LH, 1);
     return s;
   }
   function box(w, h, d, color, key, opts = {}) {
@@ -120,7 +130,7 @@
       const ff = box(8.2, 0.2, 3.8, mix(0xff4b9b, 0xff7701, t).getHex(), "block", { data: { layer: i, part: "ffn" } }); ff.position.y = 0.37;
       const st = streamSeg(0.62, rOf(STD[i])); st.position.y = 0.31;
       g.add(n1, at, n2, ff, st);
-      if (i % 4 === 0 || i === N - 1) { const l = label(`L${i}`, { size: 0.75, color: "#c9bcff" }); l.position.set(-6, 0.2, 0); g.add(l); }
+      if (i % 4 === 0 || i === N - 1) { const l = label(`L${i}`, { size: 0.7, color: "#e4dcff", bg: "rgba(16,9,38,.7)", border: "rgba(201,188,255,.35)" }); l.position.set(-6, 0.2, 0); g.add(l); }
       g.position.y = BASE(i); g.userData = { i, y: BASE(i) };
       scene.add(g); blocks.push(g);
     }
@@ -137,11 +147,13 @@
     const VOC = [["mat", 3.4], ["floor", 2.9], ["sofa", 2.5], ["bed", 2.2], ["roof", 1.7], ["table", 1.5]];
     const ex = VOC.map(([, l]) => Math.exp(l / 0.8)), z = ex.reduce((a, b) => a + b, 0) * 1.12;
     VOC.forEach(([w], i) => {
-      const p = ex[i] / z, h = 0.3 + p * 9;
-      const b = box(1.1, h, 1.1, i === 0 ? 0xff4b9b : 0xc9bcff, "out", { glow: 0.35 });
-      b.position.set(-4.5 + i * 1.8, 1.7 + h / 2, 0); b.userData.h = h; topGroup.add(b); bars.push(b);
-      const l = label(`${w} ${Math.round(p * 100)}%`, { size: 0.62 }); l.position.set(-4.5 + i * 1.8, 1.9 + h + 0.35, 0); topGroup.add(l);
+      const p = ex[i] / z, h = 0.3 + p * 9, x = -5 + i * 2;
+      const b = box(1.1, h, 1.1, i === 0 ? 0xff4b9b : 0x8f7bff, "out", { glow: 0.35 });
+      b.position.set(x, 1.7 + h / 2, 0); b.userData.h = h; topGroup.add(b); bars.push(b);
+      const l = label(`${w}\n${Math.round(p * 100)}%`, { size: 0.72, bg: i === 0 ? "rgba(214,24,110,.95)" : undefined });
+      l.position.set(x, 1.7 + h + 1.25, 0); topGroup.add(l);
     });
+    const ttl = label("next token after “The cat sat on the”", { size: 0.85 }); ttl.position.set(0, 1.7 + 0.3 + (ex[0] / z) * 9 + 3.3, 0); topGroup.add(ttl);
     topGroup.position.y = TOP; scene.add(topGroup);
     tieLine = new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(), new T.Vector3()]),
       new T.LineDashedMaterial({ color: 0xffb36b, dashSize: 0.5, gapSize: 0.35 }));
@@ -193,7 +205,7 @@
 
   function setSel(i) {
     sel = i;
-    if (i === null) { goal.ty = 11.5; goal.r = 58; return; }
+    if (i === null) { goal.ty = 12.8; goal.r = 62; return; }
     detailStream.scale.set(rOf(STD[i]), 1, rOf(STD[i]));
     detail.visible = true;
     goal.ty = BASE(i) + 3.6; goal.r = 25;
@@ -216,6 +228,8 @@
       setSel(u.layer); showInfo(blockInfo(u.layer)); return;
     }
     showInfo(INFO[u.key]);
+    // Output and LM head sit at the very top: bring the camera up close so the labels are readable.
+    if (u.key === "out" || u.key === "head" || u.key === "final") { setSel(null); goal.ty = TOP + 3.5; goal.r = 24; goal.phi = 1.4; }
   }
 
   // ─── Orbit controls (drag / wheel) ───
@@ -236,7 +250,7 @@
     root.querySelectorAll("[data-a]").forEach((b) => b.addEventListener("click", () => {
       const a = b.dataset.a;
       if (a === "flow") { setSel(null); flowT = 0; showInfo({ k: "Forward pass", t: "Sending a token through", s: "“The cat sat on the” → ?", b: "Watch the token climb the residual stream: embedding lookup, then 32 blocks each adding attention and SwiGLU updates, then the LM head scores all 32,000 tokens." }); }
-      if (a === "reset") { setSel(null); Object.assign(goal, { theta: 0.75, phi: 1.3, r: 58, ty: 11.5 }); showInfo(DEFAULT); }
+      if (a === "reset") { setSel(null); Object.assign(goal, { theta: 0.75, phi: 1.3, r: 62, ty: 12.8 }); showInfo(DEFAULT); }
       if (a === "spin") { spin = !spin; b.classList.toggle("on", spin); }
     }));
   }

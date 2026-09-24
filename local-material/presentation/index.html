@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Building an LLM from Scratch</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g'%3E%3Cstop offset='0' stop-color='%236042FF'/%3E%3Cstop offset='1' stop-color='%23FF7701'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='url(%23g)'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='white' font-family='Arial' font-weight='700'%3EAI%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="deck.css?v=70">
+<link rel="stylesheet" href="deck.css?v=93">
 <style>aside.notes { display: none; }</style>
 </head>
 <body>
@@ -628,6 +628,33 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
   <aside class="notes"><p>The val curve is the only one to trust. The bump around step 23,650 is within eval noise (10 eval batches). The model is under-trained by Chinchilla standards (~20 tokens per parameter ≈ 30B tokens for 1.5B).</p></aside>
 </section>
 
+<!-- ═════════════════════════ TOKENS PER PARAMETER ═════════════════════════ -->
+<section class="slide white" data-title="More tokens per parameter">
+  <div class="inner" style="top:128px">
+    <span class="eyebrow">Interactive · same prompt, more data</span>
+    <h2 style="font-size:92px;margin-bottom:10px">Tokens per parameter</h2>
+    <p class="lead" style="font-size:28px;margin-bottom:26px">How much text the model has read, divided by its size. Click a stage to hear the model at that point.</p>
+    <div id="tpp">
+      <div class="tpp-scale">
+        <div class="tpp-track"></div>
+        <div class="tpp-ticks"></div>
+        <div class="tpp-marks"></div>
+        <div class="tpp-off">Chinchilla-optimal ≈ 20 →<small>≈ 30B tokens · out of scope for one person on Colab</small></div>
+      </div>
+      <div class="tpp-card">
+        <div class="tpp-head"><span class="tpp-k"></span><b class="tpp-t"></b><span class="tpp-meta mono"></span></div>
+        <div class="tpp-q"></div>
+        <div class="tpp-a"></div>
+        <div class="tpp-why"></div>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    <p>1.51B parameters × tokens per parameter = tokens seen: 3 → ≈4.5B, 8 → ≈12B (which matches 24k steps × 491,520 tokens/step ≈ 11.8B). Chinchilla-optimal would be ≈20 tokens/param ≈ 30B tokens. That's out of scope for this project's time and budget, so the plan was to stop around 8 and fine-tune instead. Say that honestly; it's the real-deal trade-off.</p>
+    <p>The base transcripts come from checkpoints between 3 and 7 tokens/param (FineWeb-Edu + Gutenberg). The chat transcript is the latest: ~8 tokens/param, then fine-tuned on the chat mix. Point out that the jump in "helpfulness" is mostly the chat fine-tune, while fluency comes from pretraining tokens.</p>
+  </aside>
+</section>
+
 <!-- ═════════════════════════ 20. TRAINING HEALTH ═════════════════════════ -->
 <section class="slide white" data-title="Training health">
   <div class="inner">
@@ -753,7 +780,7 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
 <!-- ═════════════════════════ 25. BASE MODEL SPEAKS VICTORIAN ═════════════════════════ -->
 <section class="slide blob" data-title="The base model">
   <div class="inner">
-    <span class="eyebrow">Base model · FineWeb-Edu + Project Gutenberg</span>
+    <span class="eyebrow">Base model · FineWeb-Edu + Project Gutenberg · 3–7 tokens/param</span>
     <h2>It speaks fluent 19th century</h2>
     <div class="grid3" style="margin-top:10px">
       <div class="fail-card step"><div class="q">You: “someone who runs meetings confidently and explains nothing correctly”</div><div class="a">“…and then makes a lot of noise. Somebody else gives you the same information, too; but when I get down to telling how people are running business…”</div><div class="why">Grammatical, period-perfect and on-topic-ish. It learned <b>style</b> first.</div></div>
@@ -768,7 +795,7 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
 <!-- ═════════════════════════ 27. CHAT FINE-TUNING ═════════════════════════ -->
 <section class="slide white" data-title="Chat fine-tuning">
   <div class="inner">
-    <span class="eyebrow">src/corpus.py · src/generate.py</span>
+    <span class="eyebrow">~8 tokens/param, then chat SFT · src/corpus.py · src/generate.py</span>
     <h2>Teaching it to take turns</h2>
     <div class="row" style="gap:60px">
       <div style="width:880px;flex:none">
@@ -905,7 +932,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     <span class="eyebrow" style="-webkit-text-fill-color:#fff">Roadmap</span>
     <h2 style="color:#fff">What's next</h2>
     <div class="grid3" style="margin-top:10px">
-      <div class="card"><h3>Better data</h3><p>Rebalance toward modern text (more FineWeb-Edu), dedupe, filter scan artefacts, and aim for Chinchilla-scale tokens (~30B).</p></div>
+      <div class="card"><h3>Better data</h3><p>Rebalance toward modern text (more FineWeb-Edu), dedupe and filter scan artefacts: better tokens, not just more of them.</p></div>
       <div class="card"><h3>Real chat SFT</h3><p>A proper instruction set in ChatML, with evaluation on held-out prompts instead of vibes.</p></div>
       <div class="card"><h3>Measure the experts</h3><p>Domain perplexity before/after each growth round, expert load and forgetting on general text.</p></div>
     </div>
@@ -986,7 +1013,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
 <script src="assets/vendor/qrcode.js"></script>
 <script src="assets/vendor/three.min.js"></script>
 <script src="deck.js?v=30"></script>
-<script src="widgets.js?v=80"></script>
-<script src="model3d.js?v=4"></script>
+<script src="widgets.js?v=93"></script>
+<script src="model3d.js?v=13"></script>
 </body>
 </html>
