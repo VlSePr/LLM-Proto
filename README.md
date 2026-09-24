@@ -164,11 +164,15 @@ LLM-Proto/
 │   ├── visualize.py         # Model internals visualization
 │   ├── config.py            # Configuration dataclasses, presets & validated YAML loading
 │   ├── utils.py             # Checkpointing, LR schedule, environment detection
-│   └── gdrive.py            # Google Drive checkpoint backup
+│   ├── gdrive.py            # Google Drive checkpoint backup
+│   ├── progress.py          # Byte-level progress bars for Drive transfers
+│   ├── outputs.py           # Saving / publishing notebook figures and bundles
+│   └── report.py            # Text summaries of a run, a dataset and training results
 ├── scripts/                 # Automation scripts
 │   ├── train_tokenizer.py   # Standalone tokenizer training
 │   ├── run_training.sh      # tmux-based training launcher
-│   └── setup_vastai.sh      # vast.ai instance setup
+│   ├── setup_vastai.sh      # vast.ai instance setup
+│   └── local/               # Machine-specific helpers, gitignored (e.g. chat-corpus tokenization)
 ├── tests/                   # pytest suite + smoke-test fixtures
 ├── data/                    # Tokenized binary data (generated)
 │   └── custom/              # Your own txt/ and jsonl/ data
@@ -177,6 +181,8 @@ LLM-Proto/
 ├── LLM_proto.ipynb          # Training notebook (Colab-ready): Setup → Prepare → Train → Analyse → Outputs; one config cell
 ├── LLM-expert.ipynb         # Mixture-of-Experts fine-tuning notebook — thin driver over src/
 ├── LLM-inference.ipynb      # Inference / chat notebook — thin driver over src/
+├── local-material/          # EPAM.AI Conference 2026 talk: interactive deck, charts, transcripts
+├── DOCUMENTATION.md         # Technical reference (math, diagrams)
 └── requirements.txt         # Python dependencies
 ```
 
@@ -221,6 +227,28 @@ bash scripts/setup_vastai.sh
 # Launch training (survives SSH disconnect via tmux)
 bash scripts/run_training.sh small
 ```
+
+## Conference talk
+
+[`local-material/`](local-material/) holds the EPAM.AI Conference 2026 talk *Building an LLM from scratch*:
+an offline, interactive HTML deck (3D model of the 1.5B, sampling playground, prompt explorer over real
+transcripts, live-demo slides) plus the charts and chat transcripts it was built from.
+
+```bash
+python -m http.server 8765 --directory local-material/presentation   # then open http://localhost:8765
+```
+
+See [local-material/README.md](local-material/README.md) for controls, the pre-talk checklist and credits.
+
+## Acknowledgements
+
+Inspired by Sebastian Raschka's *Build a Large Language Model (From Scratch)* (Manning, 2024). Trained on
+[FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu),
+[Project Gutenberg](https://huggingface.co/datasets/sedthh/gutenberg_english), and, for chat fine-tuning,
+[SmolTalk](https://huggingface.co/datasets/HuggingFaceTB/smoltalk),
+[UltraChat 200k](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k),
+[Dolly 15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k) and
+[Alpaca (cleaned)](https://huggingface.co/datasets/yahma/alpaca-cleaned). Each dataset keeps its own licence.
 
 ## Documentation
 

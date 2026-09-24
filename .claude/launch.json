@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "presentation",
-      "runtimeExecutable": "C:/Users/zakot/source/LLM-Proto/.venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "C:/Users/zakot/source/LLM-Proto/local-material/presentation"],
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "local-material/presentation"],
       "port": 8765
     }
   ]

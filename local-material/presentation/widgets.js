@@ -453,7 +453,7 @@
     "t": "~3 tokens / param",
     "meta": "≈ 4.5B tokens · FineWeb-Edu + Gutenberg",
     "a": "",
-    "why": "Examples from the first checkpoint are coming (Early-llm-chat file)."
+    "why": "Examples from the first checkpoint will be added here."
   },
   {
     "x": 5,

@@ -13,9 +13,8 @@ logs/
 
 # Experiment tracking
 wandb/
-# Conference materials: raw inputs stay local, only the finished deck is tracked
-local-material/*
-!local-material/presentation/
+# Conference talk materials are tracked, including the model's chart outputs
+!local-material/outputs/
 
 # Credentials and local overrides (never commit)
 .env
