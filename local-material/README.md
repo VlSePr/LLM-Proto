@@ -33,10 +33,18 @@ Opening `index.html` straight from disk also works, but some browsers block the 
 | `←` | back |
 | `O` | overview grid (click a slide to jump) |
 | `S` | speaker-notes window with a timer |
+| `P` | full speaker script, all notes in order (printable / save as PDF) |
 | `F` | fullscreen |
 | `?` | help |
 
 Slides are addressable as `#/N`, e.g. `http://localhost:8765/#/9`.
+
+## Speaker notes
+
+Every slide's notes have the same parts: **⏱ timing** (six slides are marked *skip if short on time*), a plain-language
+**narration** you can read almost as-is (built on one set of analogies: the guessing game, the 32-floor building with a
+shared notebook, the classroom, clock hands), **key clues** (numbers and facts), **Do** (what to click) and
+**If asked**. Press `S` for the live notes window or `P` for the whole script.
 
 ## Before the talk
 

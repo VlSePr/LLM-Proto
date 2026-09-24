@@ -75,6 +75,11 @@
       main{flex:1;overflow:auto;padding:22px 28px}
       h2{margin:0 0 8px;font-size:30px} .nx{color:#b9b0dd;font-size:17px;margin-bottom:18px}
       .notes p{margin:0 0 12px} .notes li{margin-bottom:8px} .steps{color:#ff9dc9;font-weight:700}
+      .n-time{font-size:15px;color:#b9b0dd;margin-bottom:12px;letter-spacing:.04em} .n-time b{color:#ffb36b}
+      .n-say{font-size:23px;line-height:1.55;color:#fff;border-left:4px solid #ff4b9b;padding-left:16px}
+      .n-say b{color:#ffd1e6}
+      .n-keys{font-size:17px;color:#d9d3f5;background:rgba(255,255,255,.05);border-radius:10px;padding:12px 16px 12px 34px;margin:6px 0 14px}
+      .n-do{font-size:17px;color:#b8f5cf} .n-ask{font-size:17px;color:#ffd79a}
       footer{padding:10px 22px;color:#8f86b8;font-size:15px} button{font:inherit;padding:6px 14px;margin-left:6px;border-radius:8px;border:0;cursor:pointer}
     </style></head><body><header><span id="pos"></span><span id="clock">00:00</span><span><button id="p">◀</button><button id="n">▶</button><button id="r">reset timer</button></span></header>
     <main><h2 id="t"></h2><div class="nx" id="nx"></div><div class="steps" id="st"></div><div class="notes" id="notes"></div></main>
@@ -92,6 +97,30 @@
     }, 500);
     syncNotes();
   }
+  // ─── Full script: every slide's notes in order, printable (P) ───
+  function openScript() {
+    const w = window.open("", "llm-script");
+    if (!w) return;
+    const body = slides.map((s, i) => {
+      const n = s.querySelector("aside.notes");
+      return `<section><h2><span>${i + 1}</span>${titleOf(s)}</h2>${n ? n.innerHTML : "<p><i>No notes</i></p>"}</section>`;
+    }).join("");
+    w.document.write(`<!doctype html><html><head><title>Speaker script</title><style>
+      body{font:17px/1.5 "Source Sans 3","Segoe UI",sans-serif;max-width:900px;margin:0 auto;padding:30px;color:#222}
+      h1{font-size:30px;margin:0 0 6px} .hint{color:#777;margin-bottom:24px}
+      section{border-top:2px solid #6042FF;padding:14px 0 6px;break-inside:avoid-page}
+      h2{font-size:22px;margin:0 0 8px} h2 span{display:inline-block;min-width:34px;color:#FF4B9B}
+      .n-time{font-size:13px;color:#777;margin-bottom:6px} .n-time b{color:#c25a00}
+      .n-say{font-size:17px;border-left:3px solid #FF4B9B;padding-left:12px;margin:0 0 10px}
+      .n-keys{font-size:14px;color:#444;background:#f6f4fc;border-radius:8px;padding:8px 12px 8px 30px}
+      .n-do{font-size:14px;color:#166534} .n-ask{font-size:14px;color:#9a5b00}
+      button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid #6042FF;background:#fff;color:#6042FF;cursor:pointer}
+      @media print{button,.hint{display:none} body{padding:0}}
+    </style></head><body><h1>Building an LLM from scratch · speaker script</h1>
+    <div class="hint">${slides.length} slides · <button onclick="print()">Print / save as PDF</button></div>${body}</body></html>`);
+    w.document.close();
+  }
+
   const titleOf = (s) => (s.dataset.title || s.querySelector("h1,h2")?.textContent || "").trim();
   function syncNotes() {
     if (!notesWin || notesWin.closed) return;
@@ -117,6 +146,7 @@
       case "o": case "O": case "Escape": toggleOverview(e.key === "Escape" ? false : undefined); break;
       case "f": case "F": fullscreen(); break;
       case "s": case "S": openNotes(); break;
+      case "p": case "P": openScript(); break;
       case "?": document.getElementById("help").classList.toggle("open"); break;
       default: return;
     }
@@ -142,7 +172,7 @@
   document.getElementById("hud").addEventListener("click", (e) => {
     const a = e.target.dataset.act;
     if (a === "prev") prev(); else if (a === "next") next(); else if (a === "ov") toggleOverview();
-    else if (a === "fs") fullscreen(); else if (a === "notes") openNotes(); else if (a === "help") document.getElementById("help").classList.toggle("open");
+    else if (a === "fs") fullscreen(); else if (a === "notes") openNotes(); else if (a === "script") openScript(); else if (a === "help") document.getElementById("help").classList.toggle("open");
   });
 
   window.addEventListener("resize", fitCentered);

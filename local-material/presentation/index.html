@@ -23,9 +23,11 @@
     <p style="margin-top:40px;font:600 34px/1.3 var(--body);letter-spacing:.06em">Volodymyr Prudnikov&nbsp;&nbsp;<span style="opacity:.6;font-weight:400">· EPAM</span></p>
   </div>
   <aside class="notes">
-    <p>Welcome. The talk is about building a LLaMA-style language model <b>from an empty folder</b>, with no HF Transformers and no pre-trained weights, and about what that actually teaches you.</p>
-    <p>It's "the real deal": real numbers, real loss curves, real (often funny) outputs. The deck is interactive, and I'll be clicking things.</p>
-    <p>Controls: → next, ← back, O overview, F fullscreen, S this notes window.</p>
+    <div class="n-time">⏱ 30 s</div>
+    <p class="n-say">Hi, I'm Volodymyr. Today I'll show you how a language model like ChatGPT works on the inside, by showing you one I built myself, from an empty folder.</p>
+    <p class="n-say">Here's the whole idea in one sentence: <b>an LLM is a machine that plays a guessing game.</b> You show it some words, it guesses the next word. Then it adds that word and guesses again. That's all it ever does. Everything today is about how it gets good at that game.</p>
+    <ul class="n-keys"><li>From scratch: no Hugging Face Transformers, no pre-trained weights</li><li>“The real deal”: real numbers, real loss curves, real (often funny) outputs</li></ul>
+    <p class="n-do"><b>Do:</b> Controls: → next, ← back, O overview, F fullscreen, S this notes window.</p>
   </aside>
 </section>
 
@@ -43,7 +45,11 @@
       <div class="item"><div class="n gtext">+</div><div class="t">Experts &amp; lessons</div><div class="d">A quick look at Mixture-of-Experts, then what was worth it</div></div>
     </div>
   </div>
-  <aside class="notes"><p>About 45 minutes. The audience gets the chat link right after this slide and keeps it for the whole talk. The tiny model starts training at the beginning of Part 3 and we check back on it in Part 4.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 30 s</div>
+    <p class="n-say">Here's the plan. First, you'll get to chat with my model on your phone. Then we open it up: how it's built, how it reads text, how it learns, and how it learns to talk. There are two live moments: you chat with the big model, and we train a small one together while I talk.</p>
+    <ul class="n-keys"><li>~45 minutes</li><li>The audience keeps the chat link for the whole talk</li><li>Tiny model starts training at the beginning of Part 3; check-in at the start of Part 4</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ CREDITS ═════════════════════════ -->
@@ -88,8 +94,9 @@
     <p class="credits-foot" style="margin-top:0"><b>Ideas &amp; tools:</b> LLaMA (Touvron et al., 2023) · RMSNorm (Zhang &amp; Sennrich, 2019) · RoPE (Su et al., 2021) · SwiGLU (Shazeer, 2020) · GQA (Ainslie et al., 2023) · PyTorch · Hugging Face tokenizers &amp; datasets · Google Colab</p>
   </div>
   <aside class="notes">
-    <p>Thirty seconds, but worth saying out loud: none of this works without people who spend months building and cleaning open datasets and then give them away. FineWeb-Edu for the tokenizer and pretraining, Project Gutenberg for pretraining too (the books are why it talks like a Victorian novel), chat from SmolTalk, UltraChat, Dolly and Alpaca.</p>
-    <p>Licenses are as listed on each Hugging Face dataset card. The Elden Ring QA set is non-commercial, so this is a research / demo model, not a product.</p>
+    <div class="n-time">⏱ 30–45 s</div>
+    <p class="n-say">Before anything else: a model is only as good as what it reads. None of this exists without people who spent months collecting and cleaning text, then gave it away for free. These are the libraries my model read. Please remember these names.</p>
+    <ul class="n-keys"><li>FineWeb-Edu: tokenizer <i>and</i> pre-training (Hugging Face: Lozhkov, Ben Allal, von Werra, Wolf)</li><li>Project Gutenberg: pre-training too. The old books are why it sometimes talks like a Victorian novel</li><li>Chat: SmolTalk, UltraChat 200k, Dolly 15k, Alpaca (cleaned)</li><li>Licences are from each dataset card; EldenRingQA is non-commercial, so this is a research / demo model</li><li>Inspiration: Sebastian Raschka, <i>Build a Large Language Model (From Scratch)</i></li></ul>
   </aside>
 </section>
 
@@ -110,7 +117,13 @@
       <div class="inspired-s">The book that made me try this myself. Its step-by-step GPT build is the ancestor of this project. <span class="mono">github.com/rasbt/LLMs-from-scratch</span></div>
     </div>
   </div>
-  <aside class="notes"><p>Why do this in 2026 when frontier models exist? Not to compete. You build one to understand one. Every concept you use daily as an AI engineer (context windows, sampling, fine-tuning, MoE) becomes concrete.</p><p>Click to reveal the three reasons, then the credit: Sebastian Raschka's book <i>Build a Large Language Model (From Scratch)</i> is what inspired this project. Worth recommending to the audience as the place to start.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Why build one when you can just use ChatGPT? Feynman wrote on his blackboard: what I cannot create, I do not understand. It's like a bicycle: you can ride one for years, but you only really understand it after you've taken one apart and put it back together.</p>
+    <p class="n-say">When you use an API, words like temperature, context window or hallucination are just settings. After you build one, each of them becomes something you can point at.</p>
+    <ul class="n-keys"><li>APIs hide the knobs</li><li>Small is honest: at 1.5B every failure is visible</li><li>Affordable: one rented GPU, ~$120 of compute</li></ul>
+    <p class="n-do"><b>Do:</b> Click to reveal the three reasons, then the book card. Recommend Raschka's book as the place to start.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ LIVE 1: CHAT WITH THE 1.5B ═════════════════════════ -->
@@ -142,9 +155,12 @@
     </div>
   </div>
   <aside class="notes">
-    <p><b>Before the talk:</b> run LLM-inference.ipynb up to section 6 with GRADIO_SHARE = True, then paste the *.gradio.live link here (or open the deck with <code>?live=&lt;url&gt;</code>). The link is remembered in this browser.</p>
-    <p>Give people a minute to scan the QR code and try a prompt or two, and maybe try one yourself on screen. Then: "This is what we're going to build, piece by piece."</p>
-    <p>If Wi-Fi or Colab fails, skip ahead: Part 4 has the same prompts recorded in rehearsal (prompt explorer).</p>
+    <div class="n-time">⏱ 2 min</div>
+    <p class="n-say">Let's start with the finished thing. Scan the QR code and ask my model anything. It's 1.5 billion numbers running on one rented GPU. Try to break it: I promise it's easy.</p>
+    <p class="n-say">While you play, keep one question in mind: <b>how does it know what to say next?</b> By the end of the talk you'll be able to answer that yourself. And in Part 4 we'll look at <i>why</i> it said the weird things it said.</p>
+    <ul class="n-keys"><li>T 0.8 · top-k 50 · top-p 0.9 · up to 256 tokens</li><li>One shared GPU, so requests queue: be patient</li></ul>
+    <p class="n-do"><b>Do:</b> <b>Before the talk:</b> run LLM-inference.ipynb to section 6 with GRADIO_SHARE = True and paste the *.gradio.live link here (or open the deck with ?live=&lt;url&gt;). Give people a minute; try one prompt yourself on screen. Then: “This is what we're going to build, piece by piece.”</p>
+    <p class="n-ask"><b>If asked:</b> If Wi-Fi or Colab fails, skip ahead: Part 4's prompt explorer has the same prompts recorded in rehearsal.</p>
   </aside>
 </section>
 
@@ -155,6 +171,10 @@
     <h1>Architecture</h1>
     <p class="lead" style="margin-top:30px">A decoder-only transformer in ~500 lines of PyTorch: <code>src/model.py</code></p>
   </div>
+  <aside class="notes">
+    <div class="n-time">⏱ 10 s</div>
+    <p class="n-say">Part one: what the machine looks like inside. Think of it as a building we're going to walk through, floor by floor.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 5. AT A GLANCE ═════════════════════════ -->
@@ -177,8 +197,12 @@
     </div>
   </div>
   <aside class="notes">
-    <p>Toggle between the two presets. Everything comes from <code>MODEL_CONFIGS</code> in <code>src/config.py</code>: same code, different numbers. Tiny is 43× smaller, which is why we can train it live.</p>
-    <p>Perplexity 6.56 means that on held-out text the big model is, on average, as unsure as picking among ~6.5 equally likely tokens.</p>
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Here are the model's vital signs. The most important number: <b>1.5 billion parameters</b>. A parameter is just one little knob, one number the model can adjust while it learns. Imagine a mixing desk with one and a half billion sliders. Learning means setting every slider to the right position.</p>
+    <p class="n-say">Now watch this [toggle to Tiny]: exactly the same code, just smaller numbers: 35 million knobs, 43 times fewer. That's the one we'll train live, because it learns in minutes instead of days.</p>
+    <ul class="n-keys"><li>1,508.5M parameters, 32 blocks, d_model 2048, 32 query / 8 KV heads, 4096 context, 32k vocabulary</li><li>14.8k tokens/s on one Colab G4</li><li>Perplexity 6.56: on new text it's as unsure as picking between ~6–7 equally likely words. A random guesser would be picking from 32,000</li></ul>
+    <p class="n-do"><b>Do:</b> Click “Tiny · trained live”, then back to “Large”.</p>
+    <p class="n-ask"><b>If asked:</b> Same code? Yes: everything comes from MODEL_CONFIGS in src/config.py.</p>
   </aside>
 </section>
 
@@ -204,9 +228,14 @@
     </div>
   </div>
   <aside class="notes">
-    <p>The whole model, to scale where it matters: block sizes follow parameter counts (SwiGLU slabs are wider than attention), and the residual stream's thickness follows the measured activation std per layer (≈ read from the activation-stats chart), so you can see it swell in the last 10 layers.</p>
-    <p>Suggested demo: press "Send a token through", then click block 0 (it opens up) and a late block like 28 and compare the stats. Inside an open block, click the query heads, the KV heads (GQA lines, 4:1), the RoPE ring and the three SwiGLU matrices.</p>
-    <p>The "early / middle / late" descriptions are what probing studies usually find in LLaMA-style models, not something we measured. The activation and weight observations are ours.</p>
+    <div class="n-time">⏱ 2–3 min</div>
+    <p class="n-say">This is the whole model. Read it from the bottom up, like a building.</p>
+    <p class="n-say">At the bottom, the words come in: “The cat sat on the”. Each word is turned into a list of 2048 numbers. That's the <b>embedding</b>, like giving every word its own ID card with 2048 facts on it.</p>
+    <p class="n-say">Then there are 32 floors, the <b>blocks</b>. Running up through the middle is a glowing pipe: the <b>residual stream</b>. Think of it as a notebook that gets carried up the building. On every floor, two workers read the notebook and write extra notes into it. <b>They never erase anything, they only add.</b> Notice the pipe gets thicker near the top: the notes keep piling up.</p>
+    <p class="n-say">Each floor has two rooms. The purple room is <b>attention</b>: the words look at each other. The pink room is the <b>feed-forward</b>: each word thinks on its own. At the very top, the notebook is turned into a score for every word it knows, and the highest bars win. Here: “mat”.</p>
+    <ul class="n-keys"><li>Slab sizes follow parameter counts: SwiGLU is wider than attention (~77% of a block)</li><li>Stream thickness follows the measured activation std per layer (≈3 → ≈24, read from the activation chart)</li><li>The early / middle / late descriptions are what probing studies usually find, not something we measured</li></ul>
+    <p class="n-do"><b>Do:</b> Press “Send a token through”. Click the output bars (the camera zooms to the prediction). Click block 0 (it opens up), then a late block like 28 and compare the stats. Inside an open block click the query heads, KV heads, the RoPE ring and the three SwiGLU matrices. Reset.</p>
+    <p class="n-ask"><b>If asked:</b> Rehearsal shortcuts: model3d.select(12) and model3d.flow() in the browser console.</p>
   </aside>
 </section>
 
@@ -226,9 +255,11 @@
     </div>
   </div>
   <aside class="notes">
-    <p>Click through the stack. Key points: pre-norm, a residual stream that is only ever added to, and 32 identical blocks.</p>
-    <p>"Trace a token" animates one forward pass. The parameter counts are exact for the large preset: 45.1M per block × 32 + 65.5M embeddings = 1,508.5M.</p>
-    <p>~77% of a block's parameters are the FFN, which is why MoE later replaces exactly that module.</p>
+    <div class="n-time">⏱ 1.5 min · <b>skip if short on time</b></div>
+    <p class="n-say">Let's zoom into one floor. The recipe is always the same: first <b>tidy up</b> the notebook (the norm), then <b>look around</b> at the other words (attention), write the result into the notebook. Tidy up again, <b>think</b> (the feed-forward), write that in too. Then climb to the next floor. 32 times.</p>
+    <p class="n-say">“Trace a token” shows one trip up the building.</p>
+    <ul class="n-keys"><li>Pre-norm: normalise <i>before</i> each sub-layer</li><li>Residual stream is only ever added to</li><li>45.1M params per block × 32 + 65.5M embeddings = 1,508.5M</li><li>~77% of a block is the FFN, which is why MoE replaces exactly that</li></ul>
+    <p class="n-do"><b>Do:</b> Click Trace a token, then click a couple of nodes.</p>
   </aside>
 </section>
 
@@ -258,7 +289,12 @@
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Both come from the LLaMA paper lineage (Zhang &amp; Sennrich 2019; Shazeer 2020). Neither is exotic; together they're the difference between a GPT-2 block and a LLaMA block.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1.5 min · <b>skip if short on time</b></div>
+    <p class="n-say">Two small parts that make a big difference. <b>RMSNorm is a volume knob.</b> Some numbers in the notebook get very loud, some very quiet. Before a room reads the notebook, RMSNorm turns everything to a normal speaking volume, so nobody shouts and nobody whispers.</p>
+    <p class="n-say"><b>SwiGLU is the thinking room, with gates.</b> The idea gets spread out into 5632 little channels, and each channel has a door that decides how far to open, a little or a lot, depending on the input. Then everything is squeezed back down. Those doors are what make it smarter than a plain layer of the same size.</p>
+    <ul class="n-keys"><li>RMSNorm: no mean, no bias, computed in fp32 (Zhang & Sennrich 2019)</li><li>SwiGLU: W_down( SiLU(W_gate x) ⊙ W_up x ), 2048 → 5632 → 2048, 34.6M params per layer (Shazeer 2020)</li><li>Together they're the difference between a GPT-2 block and a LLaMA block</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 8. ROPE ═════════════════════════ -->
@@ -281,8 +317,12 @@
     </div>
   </div>
   <aside class="notes">
-    <p>Drag m and n: the relative angle changes. Then click "shift both": the two arrows spin, but the angle between them and the cosine stay fixed. That's the relative-position property.</p>
-    <p>Higher dim pairs (larger i) rotate more slowly, from 1 rad/token at i=0 down to ~1e-4 rad/token. Fast pairs encode local order and slow pairs long range. No learned parameters.</p>
+    <div class="n-time">⏱ 2 min</div>
+    <p class="n-say">Here's a problem: the model sees all the words at once, like a bag of Scrabble tiles. How does it know which word came first? “Dog bites man” and “man bites dog” use the same tiles.</p>
+    <p class="n-say">RoPE's trick uses <b>clock hands</b>. Each word gets an arrow, and the arrow is turned by an amount that depends on its seat number: seat 1 turns a little, seat 5 turns more. When two words compare arrows, the <b>angle between them</b> tells them how far apart they sit.</p>
+    <p class="n-say">The magic: if you move both words along by the same amount [click Shift], both arrows spin, but the angle between them stays the same. The model only cares about the distance, not the exact seat. That's why it doesn't need to learn anything here: zero parameters.</p>
+    <ul class="n-keys"><li>θᵢ = 10000^(−2i/64): pair 0 turns 1 rad/token, the slowest ~1e-4</li><li>Fast pairs = nearby order, slow pairs = long range</li><li>q·k depends only on m − n</li></ul>
+    <p class="n-do"><b>Do:</b> Drag m and n and watch the relative angle change. Then click “Shift both +12”: arrows spin, the cosine stays fixed.</p>
   </aside>
 </section>
 
@@ -312,9 +352,11 @@
     </div>
   </div>
   <aside class="notes">
-    <p>At inference, every generated token needs K and V for all previous tokens in all 32 layers: that's the KV cache. With MHA at 4k context and batch 8 it's 8 GB, more than the weights (3 GB in bf16).</p>
-    <p>GQA with 8 KV heads cuts it 4×. MQA goes all the way to 1 head but hurts quality. LLaMA-2-70B, Mistral and friends all use GQA.</p>
-    <p>Formula: 2 (K,V) × layers × kv_heads × head_dim × tokens × batch × 2 bytes.</p>
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">Attention is like a classroom. Every word raises its hand with a <b>question</b> (the query), every word wears a <b>name tag</b> (the key) saying what it's about, and has a <b>message</b> (the value). A word listens most to the classmates whose name tags match its question.</p>
+    <p class="n-say">Now, when the model writes a long answer, it has to remember every classmate's name tag and message for every word so far. That's the <b>KV cache</b>, and it gets heavy, like a backpack. Grouped-query attention says: 4 students can share one textbook. 32 questions, but only 8 name-tag sets. Backpack four times lighter, almost no loss in quality.</p>
+    <ul class="n-keys"><li>MHA at 4k context, batch 8: 8 GB of cache, more than the weights (3 GB bf16)</li><li>GQA (8 KV): 2 GB. MQA (1 KV): 256 MB, but quality drops</li><li>Formula: 2 × layers × kv_heads × head_dim × tokens × batch × 2 bytes</li><li>LLaMA-2-70B, Mistral and others use GQA</li></ul>
+    <p class="n-do"><b>Do:</b> Toggle MHA / GQA / MQA, then drag context and batch.</p>
   </aside>
 </section>
 
@@ -325,6 +367,10 @@
     <h1>Data &amp; tokenizer</h1>
     <p class="lead" style="margin-top:30px">A model is only as good as the tokens it sees, and you want to tokenize them exactly once.</p>
   </div>
+  <aside class="notes">
+    <div class="n-time">⏱ 10 s</div>
+    <p class="n-say">Part two: the food. What does the model eat, and how do we cut it into bite-sized pieces?</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 11. PIPELINE ═════════════════════════ -->
@@ -349,7 +395,13 @@
       <div class="callout"><b>Colab-proof:</b> VMs die. Tokenizing billions of tokens again costs hours; downloading shards takes minutes.</div>
     </div>
   </div>
-  <aside class="notes"><p>The core design rule: <code>src.train</code> only ever calls <code>create_dataloader(data_dir)</code>. All the expensive, failure-prone work happens once, gets fingerprinted and is cached.</p><p>Pre-tokenized datasets from other sources can be pulled by folder (<code>fetch_prebuilt_dataset</code>). That path only checks the tokenizer hash.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Training is like cooking every day. You don't want to chop the vegetables again every morning. So we chop everything <b>once</b>, put it in labelled boxes, and freeze it. That's the pipeline: download the text, cut it into tokens once, store the numbers in big files called shards, and keep them on Google Drive.</p>
+    <p class="n-say">The label on the box is a fingerprint. If anything about the recipe changes, even one file, the label changes and we chop again. Otherwise we just grab the frozen box. The training code never chops anything.</p>
+    <ul class="n-keys"><li>Sources: HF streaming, text dirs, JSONL; pretrained on FineWeb-Edu + Project Gutenberg</li><li>uint16: 32,000 < 65,536, so each token is 2 bytes and memory-mapped straight into batches</li><li>100M-token shards + val.bin (every 200th doc) + manifest.json</li><li>Drive cache at tokenized/&lt;fingerprint&gt;/: a new Colab VM downloads instead of re-tokenizing</li></ul>
+    <p class="n-ask"><b>If asked:</b> Datasets from other sources? fetch_prebuilt_dataset pulls a folder as-is and only checks the tokenizer hash.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 12. TOKENIZER + PER-TOKEN LOSS ═════════════════════════ -->
@@ -376,7 +428,13 @@
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Tokenization is where a lot of "LLM weirdness" comes from: counting letters, spacing, numbers split into odd chunks ("Ġ17" + "91"). Point at the heatmap. Once the model has committed to "United", "States" costs almost nothing.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">Models don't read letters or words. They read <b>tokens</b>: pieces of words, like Lego bricks. Common words are one brick, rare words are built from several bricks. Our model knows 32,000 different bricks.</p>
+    <p class="n-say">Look at the colours: red means the model was <b>surprised</b>. It's surprised by “Ten”, “Pass” and “Ratified”, but once it has seen “United”, the word “States” is nearly free. The model is spending its effort on the <b>new information</b>, just like you do when you read.</p>
+    <ul class="n-keys"><li>“The United States Bill of Rights” = 6 tokens, not 32 characters</li><li>Ġ = leading space: ĠUnited and United are different tokens</li><li>Byte fallback: emoji, Cyrillic, code all encode, no &lt;unk&gt;</li><li>ChatML markers &lt;|im_start|&gt; &lt;|im_end|&gt; reserved from day one</li></ul>
+    <p class="n-ask"><b>If asked:</b> Why can't LLMs count letters? Because they never see letters, only bricks. A word like “strawberry” is a few bricks, not ten letters.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 13. EMBEDDINGS 3D ═════════════════════════ -->
@@ -390,7 +448,13 @@
       <div class="emb-legend"></div>
     </div>
   </div>
-  <aside class="notes"><p>Rotate it. Digits form their own cluster, and so does punctuation. Whole words (with leading space) and word pieces separate along one principal axis: the model learned "is this the start of a word?" as a major direction.</p><p>Only 3 of 2048 dimensions are shown, so this is a shadow of the real geometry, but the structure is already clear.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">Remember the ID card with 2048 numbers per word? You can treat those numbers as a <b>location on a map</b>. Words that behave alike end up living in the same neighbourhood. We can't draw 2048 dimensions, so this is a 3D shadow of that map.</p>
+    <p class="n-say">Nobody told the model what a number or a comma is. But look: the digits live together, the punctuation lives together, and whole words and word pieces sit on different sides. The model <b>discovered</b> these groups on its own, just by playing the guessing game.</p>
+    <ul class="n-keys"><li>1,000 most frequent tokens, PCA from 2048-D to 3-D</li><li>Only 3 of 2048 dimensions: a shadow, but the structure is clear</li></ul>
+    <p class="n-do"><b>Do:</b> Drag to rotate, hover points to read tokens, toggle groups, try auto-rotate.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 14. DIVIDER: TRAINING ═════════════════════════ -->
@@ -400,6 +464,10 @@
     <h1>Training</h1>
     <p class="lead" style="margin-top:30px">Where most of the engineering, and most of the money, goes.</p>
   </div>
+  <aside class="notes">
+    <div class="n-time">⏱ 10 s</div>
+    <p class="n-say">Part three: school. How does a pile of random numbers become something that writes English?</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ LIVE 2: TRAIN TINY ═════════════════════════ -->
@@ -435,8 +503,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
   </div>
   <aside class="notes">
-    <p><b>Switch to Colab.</b> Run LLM_proto.ipynb with MODEL_SIZE = "tiny" and RESUME_FROM = "". Once the first loss line prints, come back and press “Mark training start”. The check-in slide at the start of Part 4 shows how long it has been running.</p>
-    <p>Leave it training while we go through the engineering behind the big run.</p>
+    <div class="n-time">⏱ 2 min</div>
+    <p class="n-say">Let's teach one right now. This is the tiny model: 35 million knobs, all set randomly. At the start it knows nothing. It's like a baby babbling random sounds.</p>
+    <p class="n-say">Here's the lesson: we show it a sentence with the next word hidden, it guesses, we show it the answer, and every knob gets nudged a tiny bit toward a better guess. Millions of times. The number we watch is the <b>loss</b>: how surprised it was by the right answer. High loss is very surprised, low loss is “I knew it”.</p>
+    <p class="n-say">It will start at about 10.4. That's the score of pure guessing among 32,000 bricks. First it learns the most common bricks (“the”, commas), and the loss drops fast. Then it learns pairs and grammar, and the loss slides slowly. We'll check on it in Part 4.</p>
+    <ul class="n-keys"><li>MODEL_SIZE = "tiny", RESUME_FROM = "" in LLM_proto.ipynb</li><li>Starting loss ≈ ln 32,000 = 10.37</li><li>Also watch grad norm settle after warm-up, tokens/s stay flat</li></ul>
+    <p class="n-do"><b>Do:</b> Switch to Colab and start the notebook. When the first loss line prints, come back and press “Mark training start”. Leave it running.</p>
   </aside>
 </section>
 
@@ -500,14 +572,11 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>Press → to walk through the seven stages; each one lights up its arrow. Clicking a numbered circle jumps to that stage.</p>
-    <ol><li>Code and the tokenizer come from GitHub (<code>git clone</code> in the notebook's first cell).</li>
-    <li>Data is tokenized <b>once</b> (here on the workstation) and uploaded to Drive with a manifest and fingerprint.</li>
-    <li>Colab mounts Drive and copies the shards to the VM's local disk; memory-mapped reads from Drive would be far too slow.</li>
-    <li>Training on the GPU.</li>
-    <li>Every 500 steps: an atomic checkpoint plus a Drive upload.</li>
-    <li>When the VM dies, a new one clones, mounts, and resumes from latest.pt on the exact next batch.</li>
-    <li>Inference: LLM-inference.ipynb loads a checkpoint from Drive and shares a Gradio link, which is the chat the audience has been using since the start.</li></ol>
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">What happened when I pressed Run? Think of Colab as a <b>rented desk</b>: powerful, but it can be cleared at any moment. Google Drive is my <b>locker</b>: slower, but things stay there. GitHub is the <b>recipe book</b>.</p>
+    <p class="n-say">So the desk grabs the recipe from GitHub, takes the pre-chopped food from the locker, cooks, and every so often puts a snapshot of the half-cooked dish back into the locker. If the desk gets cleared, a new desk picks up from the last snapshot. At the end, the finished model is served to you through a link: that's the chat you've been using.</p>
+    <ul class="n-keys"><li>1 clone · 2 tokenize once, upload shards + manifest · 3 copy shards to the VM's SSD · 4 train · 5 checkpoint every 500 steps (≈18 GB for the 1.5B) · 6 VM dies → resume latest.pt · 7 serve via Gradio</li><li>Shards are copied to local disk because reading them from Drive would be far too slow</li></ul>
+    <p class="n-do"><b>Do:</b> Press → to walk the seven stages; click a numbered circle to jump.</p>
   </aside>
 </section>
 
@@ -529,7 +598,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
         scaler.scale(loss).backward()
     clip_grad_norm_(params, <span class="t">1.0</span>); scaler.step(opt); opt.zero_grad(set_to_none=<span class="k">True</span>)</pre>
   </div>
-  <aside class="notes"><p>Nothing here is novel. The point is that every piece is visible and testable: 6 seconds of CPU tests cover resume, OOM replay, schedules and MoE.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1.5 min</div>
+    <p class="n-say">This is the whole lesson plan, in four ideas. <b>AdamW</b> is the teacher that decides how much to nudge each knob. The <b>schedule</b> is how big the nudges are: gentle at the start (warm-up, like stretching before a run), big in the middle, and smaller and smaller at the end so it settles down. <b>Precision</b>: we store numbers with fewer digits when that's accurate enough, which is faster. And <b>speed</b> tricks so the GPU never waits.</p>
+    <p class="n-say">The code at the bottom is the whole loop. Guess, measure how wrong, nudge the knobs, repeat.</p>
+    <ul class="n-keys"><li>AdamW β (0.9, 0.95); no weight decay on norms, biases, 1-D params; grad clip 1.0</li><li>Linear warm-up then cosine to min_lr (10% of peak)</li><li>bf16 on Ampere+ / Blackwell; fp16 + GradScaler on older GPUs</li><li>torch.compile on CUDA (auto-off on Colab); gradient checkpointing must go in before compile</li><li>12 × 10 sequences per optimizer step</li><li>~6 s of CPU tests cover resume, OOM replay, schedules and MoE</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 16. EXACT RESUME ═════════════════════════ -->
@@ -553,7 +627,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       <div class="card"><h3>Safe on disk</h3><p>Atomic write (tmp + <code>os.replace</code>), copy to <code>latest.pt</code> / <code>best.pt</code>, prune to N, then a best-effort upload to Drive.</p></div>
     </div>
   </div>
-  <aside class="notes"><p>A checkpoint's <code>step</code> is the <b>last completed</b> step, so resume starts at step+1. There's a test that trains N steps straight through, then N/2 + interrupt + resume, and asserts the two runs have identical weights.</p><p>Weights are saved without the <code>_orig_mod.</code> prefix that torch.compile adds.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Colab <i>will</i> kill your machine. So we save the game, like in a video game. But a normal save isn't enough: we want to continue <b>exactly</b> where we were, same next page, same dice rolls. Otherwise two runs slowly drift apart.</p>
+    <p class="n-say">So every save stores the knobs, the teacher's memory, the random-number dice, and the exact page we were reading. When we resume, we fast-forward to that page without re-reading the book.</p>
+    <ul class="n-keys"><li>Checkpoint step = last completed step, resume at step + 1</li><li>Saves model, optimizer, GradScaler, all RNG states, epoch, batches_in_epoch, tokens seen, best val loss, both configs</li><li>Sample order = pure function of (seed, epoch, worker layout); skip_batches fast-forwards the index stream</li><li>Atomic write (tmp + os.replace) → latest.pt / best.pt → prune → Drive upload</li><li>A test trains N steps straight vs N/2 + interrupt + resume and asserts identical weights</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 17. OOM REPLAY ═════════════════════════ -->
@@ -576,7 +655,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Memory spikes are data-dependent (activation memory, allocator fragmentation). Instead of crashing at 3 a.m., the trainer shrinks the sequence cap: 4096 → 3072 → 2304 → …</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 45 s · <b>skip if short on time</b></div>
+    <p class="n-say">Sometimes a batch is too big to fit in the GPU's memory, like trying to swallow a sandwich whole. Instead of choking and crashing at 3 a.m., the trainer takes a smaller bite: it cuts the text 25% shorter and tries the same step again, until it fits.</p>
+    <ul class="n-keys"><li>All micro-batches of a step are held so the whole step can be replayed</li><li>4096 → 3072 → 2304 …, floor at min_seq_len = 256, then a real error</li><li>The optimizer only steps after a full successful replay</li></ul>
+    <p class="n-do"><b>Do:</b> Click Replay.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ RESOURCES ═════════════════════════ -->
@@ -607,9 +691,10 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>Checkpoint sizes are arithmetic: fp32 weights (4 bytes/param) + AdamW's two moment buffers (8 bytes/param) ≈ 12 bytes × params. Inference only needs the bf16 weights (2 bytes/param).</p>
-    <p>Tokens/step and time/step use the current notebook settings (batch 12 × accumulation 10 × 4096 context). Earlier segments of the run may have used different settings, so treat the step time as indicative.</p>
-    <p>Data numbers come from the manifests: Gutenberg 5.50B train + 24.5M val tokens; the chat mix is 1,218,948 conversations, 980M tokens, 722M of them assistant tokens that carry loss.</p>
+    <div class="n-time">⏱ 1–1.5 min · <b>skip if short on time</b></div>
+    <p class="n-say">What does this cost? Every knob needs memory: the model itself, plus the teacher's notes about every knob. A full save of the big model is about 18 GB. The part you actually need to chat with it is only about 3 GB.</p>
+    <p class="n-say">It read 5.5 billion tokens of Gutenberg books plus FineWeb-Edu, and learned to chat from 1.2 million example conversations. Total bill so far: about 120 dollars of Colab.</p>
+    <ul class="n-keys"><li>Checkpoint ≈ 12 bytes/param (fp32 weights + AdamW's two buffers) ≈ 18 GB; bf16 weights ≈ 3 GB</li><li>Tokens/step 12 × 10 × 4096 = 491,520 and ≈33 s/step use current notebook settings (indicative)</li><li>Gutenberg 5.50B train + 24.5M val tokens; chat mix 1,218,948 conversations, 980M tokens, 722M carry loss</li></ul>
   </aside>
 </section>
 
@@ -625,7 +710,11 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       <div class="callout step"><b>Not converged.</b> A still-sloping val curve at min LR means more tokens would help more than more steps.</div>
     </div>
   </div>
-  <aside class="notes"><p>The val curve is the only one to trust. The bump around step 23,650 is within eval noise (10 eval batches). The model is under-trained by Chinchilla standards (~20 tokens per parameter ≈ 30B tokens for 1.5B).</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Is it still learning? The left chart, training loss, is noisy, because every point is one small batch and some text is simply easier. Don't read tea leaves in it. The one to trust is <b>validation</b>: text the model has never seen. It keeps going down, and it's still going down at the end. The model hasn't finished learning. It could read more.</p>
+    <ul class="n-keys"><li>Val loss 1.911 → 1.881, perplexity 6.76 → 6.56 over the last 1,500 steps</li><li>The bump near step 23,650 is eval noise (10 eval batches)</li><li>Still sloping at min LR: more tokens would help more than more steps</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ TOKENS PER PARAMETER ═════════════════════════ -->
@@ -650,8 +739,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>1.51B parameters × tokens per parameter = tokens seen: 3 → ≈4.5B, 8 → ≈12B (which matches 24k steps × 491,520 tokens/step ≈ 11.8B). Chinchilla-optimal would be ≈20 tokens/param ≈ 30B tokens. That's out of scope for this project's time and budget, so the plan was to stop around 8 and fine-tune instead. Say that honestly; it's the real-deal trade-off.</p>
-    <p>The base transcripts come from checkpoints between 3 and 7 tokens/param (FineWeb-Edu + Gutenberg). The chat transcript is the latest: ~8 tokens/param, then fine-tuned on the chat mix. Point out that the jump in "helpfulness" is mostly the chat fine-tune, while fluency comes from pretraining tokens.</p>
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">Here's a simple way to measure how much a model has studied: how many words it has read, per knob. Our model read about 8 words for every knob. Let's listen to it at different ages.</p>
+    <p class="n-say">Around 3 to 7, it writes like a Victorian novel: beautiful sentences, but it doesn't understand you asked something. At 8, plus the chat lessons, it answers <b>as a turn</b>. It even writes a little poem.</p>
+    <p class="n-say">The research rule of thumb says about 20 words per knob is the sweet spot. For one person on Colab that's out of scope, so I stopped around 8 and fine-tuned instead. That's the real-deal trade-off.</p>
+    <ul class="n-keys"><li>1.51B × 8 ≈ 12B tokens (matches 24k steps × 491,520 ≈ 11.8B)</li><li>Base transcripts: 3–7 tokens/param; chat transcript: ~8 + chat SFT</li><li>Helpfulness mostly comes from the chat fine-tune; fluency comes from pre-training tokens</li><li>Chinchilla ≈ 20 → ≈30B tokens: out of scope</li></ul>
+    <p class="n-do"><b>Do:</b> Click the stages ~3, 3–7, ~8.</p>
   </aside>
 </section>
 
@@ -667,7 +760,11 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       <div class="callout"><b>Throughput</b> is flat at 14,780 – 14,800 tok/s. The data loader is never the bottleneck.</div>
     </div>
   </div>
-  <aside class="notes"><p>These three are the first things I look at when a run misbehaves. A growing grad norm, or throughput that saw-tooths (loader starvation), shows up here long before the loss tells you.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 45 s · <b>skip if short on time</b></div>
+    <p class="n-say">Three dials I watch like a doctor watches a heartbeat. The step size drops smoothly as planned. The size of the nudges stays calm, with no wild spikes. And the speed is flat, so the GPU never waits for data. If a run goes wrong, these dials tell me long before the loss does.</p>
+    <ul class="n-keys"><li>LR lands on min_lr 6e-5 at step 24,000</li><li>Grad norm ~0.2, rare spikes to 0.43, far below the 1.0 clip</li><li>14,780–14,800 tok/s: loader never the bottleneck</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 21. INSIDE: ATTENTION ═════════════════════════ -->
@@ -687,7 +784,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Attention sinks are a known phenomenon (Xiao et al. 2023, StreamingLLM). Softmax has to put probability somewhere, and the first token becomes the default dump.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">This is a picture of the classroom from the first floor: each row is a word, and bright squares show who it listens to. The top-right half is empty because <b>no peeking at the future</b>: a word can only look back.</p>
+    <p class="n-say">Two fun things: many words stare at the very first token. It's like a “nobody in particular” seat where attention goes when there's nothing better to look at. And on this first floor, words mostly look around evenly at the recent past. The sharp, clever looking happens higher up.</p>
+    <ul class="n-keys"><li>Causal mask: upper triangle is zero</li><li>Attention sink on &lt;|bos|&gt; (Xiao et al. 2023, StreamingLLM): softmax must put probability somewhere</li><li>Faint stripes on “.” and newlines: punctuation carries position information</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 22. INSIDE: ACTIVATIONS & WEIGHTS ═════════════════════════ -->
@@ -705,7 +807,11 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       <div class="callout"><b>Layer 0 is special:</b> outlier <code>wk</code> and tiny <code>attn_norm</code>, since it works on raw embeddings.</div>
     </div>
   </div>
-  <aside class="notes"><p>This is the "health check" for a deep network: no dead layers (std ≈ 0), no explosions. The steady growth is expected with pre-norm residual architectures.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 45 s · <b>skip if short on time</b></div>
+    <p class="n-say">Remember the notebook that gets thicker as it climbs? Here's the proof. The numbers in it grow from about 3 at the bottom to about 24 at the top, because every floor adds notes. The volume knobs keep each room from being overwhelmed. No floor is dead, and nothing explodes. That's a healthy building.</p>
+    <ul class="n-keys"><li>Activation std 3 → 24</li><li>Late layers: wo, wv and FFN weights grow; ffn_norm gains shrink to compensate</li><li>Layer 0 special: outlier wk, tiny attn_norm</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 23. DIVIDER: TALK ═════════════════════════ -->
@@ -715,6 +821,10 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     <h1>Making it talk</h1>
     <p class="lead" style="margin-top:30px">A language model predicts one token. Everything else is a decoding loop.</p>
   </div>
+  <aside class="notes">
+    <div class="n-time">⏱ 10 s</div>
+    <p class="n-say">Part four: making it talk. Remember, the machine only ever guesses one word. Talking is just guessing one word at a time, many times.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ LIVE CHECK-IN: TINY ═════════════════════════ -->
@@ -742,7 +852,13 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Read the latest loss off the notebook and type it into the box. The marker shows where tiny sits between random guessing and the big model. Optionally run a quick generation from tiny's latest checkpoint and compare it with what the audience got from the 1.5B.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Let's check on our baby model. [Read the loss from Colab and type it in.] It started at 10.4, random babbling. Look how far it came in just a few minutes: that first drop is the easy part, learning which bricks are common. Getting from 4 down to 1.9, where the big model is, is where the months and the GPU money go.</p>
+    <p class="n-say">Every drop of about 0.7 in loss means the model is choosing between half as many options. That's the whole story of training.</p>
+    <ul class="n-keys"><li>Loss is a log scale: −0.69 halves the choices</li><li>Random = 10.37, the 1.5B = 1.88 at 24k steps</li></ul>
+    <p class="n-do"><b>Do:</b> Type the latest loss from the notebook. Optionally generate from tiny's latest checkpoint and compare with what the audience got from the 1.5B.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 24. SAMPLING PLAYGROUND ═════════════════════════ -->
@@ -772,8 +888,12 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
   </div>
   <aside class="notes">
-    <p>Same order as <code>model.generate</code>: repetition penalty → temperature → top-k → top-p → sample.</p>
-    <p>Demo: Greedy always says "mat". Chaos lets "spaceship" through. Then show the repetition penalty: click "mat" and "floor" to mark them as already generated, and watch "sofa" take over. Raising the penalty pushes them down further. At 2.0+ the model is <i>forced</i> away from its best guesses. That's exactly the glued-words failure we'll see in a minute.</p>
+    <div class="n-time">⏱ 2–3 min</div>
+    <p class="n-say">The model doesn't give one answer. It gives a <b>score for every word</b>, like these bars. How we pick from them changes its personality.</p>
+    <p class="n-say"><b>Greedy</b> always takes the top bar: “mat”, every time. Safe but boring. <b>Temperature</b> is how adventurous it is: low temperature is careful, high temperature is wild. [Chaos preset] Now even “spaceship” gets a chance. <b>Top-k</b>: only the best k words are allowed on stage. <b>Top-p</b>: keep adding the best words until they cover, say, 90% of the chance, and cut the rest.</p>
+    <p class="n-say">And the <b>repetition penalty</b>: if a word was already used, push it down. [Click mat and floor] See, “sofa” takes over. Too strong, and the model is forced away from its best words. Remember that: it explains a very strange failure in a minute.</p>
+    <ul class="n-keys"><li>Same order as model.generate: repetition penalty → temperature → top-k → top-p → sample</li><li>Our chat settings: T 0.8, top-k 50, top-p 0.9, rep 1.5</li><li>Entropy in bits = how undecided the model is</li></ul>
+    <p class="n-do"><b>Do:</b> Greedy → Sample ×100. Chaos → Sample ×100. Our chat. Click “mat” and “floor” (wavy underline = already generated), raise the repetition penalty, Sample ×100.</p>
   </aside>
 </section>
 
@@ -789,7 +909,13 @@ N_STEPS     = …        <span class="c"># fits the talk</span></pre>
     </div>
     <p class="lead step" style="margin-top:44px;font-size:34px">A base model doesn't answer questions. It <b>continues documents</b>. Ask it anything and it writes the next page of a Gutenberg book.</p>
   </div>
-  <aside class="notes"><p>This is the most important conceptual slide of part 4. Pre-training gives you a document-continuation engine with the "voice" of its corpus. It has never seen a question followed by an answer, so it doesn't know that's what we want.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">This is the most important idea of this part. After reading all those books, the model is not an assistant. It's a <b>continuation machine</b>. You give it a question, and it thinks: this looks like the middle of a book, what's on the next page?</p>
+    <p class="n-say">So it writes beautiful, old-fashioned English, with page numbers and village accents copied straight from scanned books. It's like a child who has only ever read Victorian novels: talented, but it has no idea you were talking to it.</p>
+    <ul class="n-keys"><li>Pre-trained on FineWeb-Edu + Project Gutenberg, 3–7 tokens/param</li><li>[Pg 211]: scanned-book artefacts leak through verbatim</li><li>Dialect spellings (hadna, somethink) from the novels</li></ul>
+    <p class="n-do"><b>Do:</b> Click to reveal the three examples one by one, then the conclusion.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 27. CHAT FINE-TUNING ═════════════════════════ -->
@@ -816,7 +942,13 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Supervised fine-tuning doesn't add much knowledge. It teaches <b>format</b>: who's speaking, when to stop, markdown lists, "Certainly!". Our chat outputs show exactly that. The form is right and the content is still 1.5B-parameter mush.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">So how do we turn a book-continuer into a chat partner? We show it thousands of conversations written as a <b>play script</b>: “user says… assistant says…”, with special markers where each turn starts and ends. After enough examples it learns manners: wait for your turn, answer, then <b>stop</b>.</p>
+    <p class="n-say">Important: this teaches the <i>format</i>, not much new <i>knowledge</i>. It learns to sound like an assistant, with lists and “Certainly!”, but what it knows still comes from reading.</p>
+    <ul class="n-keys"><li>~8 tokens/param, then chat SFT on 1.22M conversations</li><li>&lt;|im_start|&gt; / &lt;|im_end|&gt; ChatML markers; stop on &lt;|eos|&gt; or &lt;|im_end|&gt;</li><li>Clean each field before wrapping (the cleaner strips &lt;|…|&gt;)</li><li>Trim leaked turns; never feed them back into history</li><li>Repetition penalty windowed to the last 512 tokens</li></ul>
+    <p class="n-do"><b>Do:</b> Click to reveal the four points.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 26. PROMPT EXPLORER ═════════════════════════ -->
@@ -835,8 +967,11 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     </div>
   </div>
   <aside class="notes">
-    <p>Three columns, same prompts, same sampling except the repetition penalty. Good ones to click: "We didnt start the fire" (chat writes poetry), "Sunny weather on Mars" (base glues words), "Mediocrity knows nothing…" (ALL CAPS drift), "someone who runs meetings…" (chat invents user/assistant turns).</p>
-    <p><b>Honesty note:</b> the chat column was one continuous session, so the history carried over. Several answers continue the <i>previous</i> topic (e.g. "once upon a time" → women's suffrage). These transcripts were recorded before <code>clean_generated_text</code> learned to trim leaked turns.</p>
+    <div class="n-time">⏱ 1.5–2 min</div>
+    <p class="n-say">Let's compare the same questions side by side: the book-reader, the book-reader with a strict repetition penalty, and the chat model. This is probably what you saw on your phones earlier.</p>
+    <p class="n-say">Watch for the coloured marks: pink is where the model started inventing <b>both sides of the conversation</b>, orange are scanned-book artefacts, purple is words glued together, blue is getting stuck in CAPITAL LETTERS.</p>
+    <ul class="n-keys"><li>Good clicks: “We didnt start the fire” (chat writes poetry), “Sunny weather on Mars” (glued words), “Mediocrity knows nothing…” (ALL CAPS), “someone who runs meetings…” (invented turns)</li><li>Honesty: the chat column was one continuous session, so history carried over; some answers continue the previous topic</li><li>Recorded before clean_generated_text learned to trim leaked turns</li></ul>
+    <p class="n-do"><b>Do:</b> Click 2–3 prompts; use Replay for the typewriter effect; toggle highlight types.</p>
   </aside>
 </section>
 
@@ -854,7 +989,14 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
       <div class="fail-card"><div class="q">Chat · “We didnt start the fire…”</div><div class="a">“The sky became black again, another day left undone that never ended / And as I stood up to speak my truth to the gods alone…”</div><div class="why"><b>…and sometimes it's lovely.</b> Song-lyric cadence, line breaks, a consistent mood. Not bad for 1.5B.</div></div>
     </div>
   </div>
-  <aside class="notes"><p>The point of this slide: none of these are mysterious "AI hallucinations". Each maps to a concrete mechanism we've seen in this talk: the tokenizer, sampling, the training data, the chat format, context.</p><p>The glued-words explanation is our best hypothesis. It shows up with repetition penalty ≥ 1.5 on long generations.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 2–2.5 min</div>
+    <p class="n-say">The point of this slide: these aren't mysterious AI ghosts. <b>Every failure has a cause we've already seen today.</b></p>
+    <p class="n-say">Glued words? The repetition penalty pushed away all the normal words that start with a space, so only word-pieces were left, and they stick together. CAPITAL LETTERS? Once it starts shouting, shouting is the most likely next move. Invented turns? It learned the play-script format so well it plays both roles. Wrong topic? The long shared chat history outvoted a short, misspelled question. Dangerous medical nonsense? It learned the <i>tone</i> of medical text, not the facts.</p>
+    <p class="n-say">And sometimes, for 1.5 billion knobs, it's genuinely lovely.</p>
+    <ul class="n-keys"><li>Tokenizer + sampling, mode lock-in, chat format, context bleed, fluency ≠ truth</li><li>Glued words is our best hypothesis; it shows up with repetition penalty ≥ 1.5 on long generations</li></ul>
+    <p class="n-ask"><b>If asked:</b> “So it hallucinates?” It always generates the most plausible continuation. It has no separate notion of true. Fluency is not truth.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 30. MOE GRAFT ═════════════════════════ -->
@@ -904,7 +1046,12 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
       </div>
     </div>
   </div>
-  <aside class="notes"><p>Only a mention today, about 1 minute. MoE is how Mixtral, DeepSeek and friends scale: parameters grow with the number of experts, but compute per token stays at top_k FFNs. We do it post-hoc: take the dense 1.5B, swap in <code>SparseMoE</code> in the last 8 layers, and fine-tune on a domain.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1 min</div>
+    <p class="n-say">One more idea, just a peek. Instead of one thinking room per floor, you can have <b>several specialists</b> and a receptionist who sends each word to the best one or two. The building knows more, but each word still only visits one or two rooms, so it's not slower. That's how Mixtral and DeepSeek grow.</p>
+    <p class="n-say">I did it after training: copied the thinking room into specialists on the top 8 floors and taught them video-game lore.</p>
+    <ul class="n-keys"><li>Warm start: experts copy the dense FFN, so the output is unchanged at graft time</li><li>Freeze the rest; router + experts train; grow one expert per round</li><li>Switch-style load-balance loss (coefficient 0.01) stops the router collapsing</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 32. LESSONS ═════════════════════════ -->
@@ -923,7 +1070,13 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
       <span class="lead" style="font-size:36px">You'll never read an LLM's output the same way again.</span>
     </div>
   </div>
-  <aside class="notes"><p>The fourth lesson is the one most relevant to people building products on LLMs: the polish of the output is not evidence of correctness.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ 1–1.5 min</div>
+    <p class="n-say">Four things I'd tell anyone starting. <b>Data is the model</b>: feed it old books, get old-book English. <b>The plumbing matters more than the math</b>: most of the code is saving, resuming, caching, not the neural network. <b>How you pick words matters</b>: the same model writes poetry or gibberish depending on four sliders. And the most important one for anyone building products: <b>sounding right is not being right.</b></p>
+    <p class="n-say">Build one once. You'll never read an LLM's output the same way again.</p>
+    <ul class="n-keys"><li>model.py is ~550 of ~6,500 lines</li><li>Format ≠ knowledge</li></ul>
+    <p class="n-do"><b>Do:</b> Click to reveal each lesson, then the closing line.</p>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ 33. WHAT'S NEXT ═════════════════════════ -->
@@ -938,6 +1091,11 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     </div>
     <p class="lead" style="color:#fff;margin-top:60px">All code: tokenizer, data pipeline, trainer, MoE and these notebooks. <b style="color:#fff">~6 s of CPU tests</b> keep it honest.</p>
   </div>
+  <aside class="notes">
+    <div class="n-time">⏱ 30 s</div>
+    <p class="n-say">Next steps: better, more modern text rather than simply more of it; a real chat dataset with proper evaluation instead of vibes; and measuring whether the specialists actually learned their subject.</p>
+    <ul class="n-keys"><li>Better tokens, not just more</li><li>Evaluate on held-out prompts</li><li>Domain perplexity before/after each expert round</li></ul>
+  </aside>
 </section>
 
 <!-- ═════════════════════════ GO DEEPER: 4 SESSIONS ═════════════════════════ -->
@@ -960,8 +1118,9 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     </div>
   </div>
   <aside class="notes">
-    <p>For anyone who wants the details behind each part of today's talk. Each session maps to a part of this deck.</p>
-    <p>The page is on EPAM's community platform and needs EPAM SSO, so external guests may not be able to open it. Mention that, and point them to the Raschka book and the GitHub repo instead.</p>
+    <div class="n-time">⏱ 30 s</div>
+    <p class="n-say">If you want every detail, I ran four sessions that go through all of this line by line, and each one maps to a part of today's talk.</p>
+    <ul class="n-keys"><li>AI principles, architecture & tokenizer · Embeddings, attention & teaching · Building a core LLM · Train your expert layer</li><li>Needs EPAM SSO: external guests may not be able to open it; point them to the Raschka book and the GitHub repo instead</li></ul>
   </aside>
 </section>
 
@@ -974,8 +1133,10 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     <div id="links" class="links-grid"></div>
   </div>
   <aside class="notes">
-    <p>Leave this up during Q&amp;A so people can scan the codes. Links live in <code>links.js</code>: paste a URL into a card and it gets a QR code; empty cards say "link coming soon".</p>
-    <p>The SharePoint links need an EPAM login, same as the sessions page.</p>
+    <div class="n-time">⏱ 30 s</div>
+    <p class="n-say">Everything is open: the code, and soon the model and the data. Clone it, run the tests in a few seconds on a laptop, and train your own tiny model on Colab this weekend.</p>
+    <ul class="n-keys"><li>Links live in links.js: paste a URL and the card gets a QR code</li><li>SharePoint links need an EPAM login</li></ul>
+    <p class="n-do"><b>Do:</b> Leave this slide up during Q&A.</p>
   </aside>
 </section>
 
@@ -986,7 +1147,13 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
     <div style="height:2px;background:linear-gradient(90deg,rgba(255,255,255,.8),transparent);width:1200px;margin:10px 0 50px"></div>
     <p class="lead">Questions? The chat link stays open, so keep making the model misbehave.</p>
   </div>
-  <aside class="notes"><p>For Q&amp;A: the Gradio link is still up, and the sampling playground and prompt explorer are good to go back to. Press O for the overview grid.</p></aside>
+  <aside class="notes">
+    <div class="n-time">⏱ Q&A</div>
+    <p class="n-say">Let's go back to where we started. An LLM is a guessing game: bricks of text go in, a notebook climbs 32 floors, each floor looks around and thinks, and at the top it bets on the next brick. That's it. You now know more about how it works than most people who use it every day.</p>
+    <p class="n-say">Thank you. Keep breaking my model: the link is still open.</p>
+    <ul class="n-keys"><li>Good slides to return to: sampling playground, prompt explorer, the 3D model</li></ul>
+    <p class="n-do"><b>Do:</b> Press O for the overview grid to jump to any slide.</p>
+  </aside>
 </section>
 
 </div>
@@ -994,7 +1161,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
 <div id="progress"></div>
 <div id="hud">
   <button data-act="prev">◀</button><button data-act="next">▶</button>
-  <button data-act="ov">Overview (O)</button><button data-act="notes">Notes (S)</button><button data-act="fs">Fullscreen (F)</button><button data-act="help">?</button>
+  <button data-act="ov">Overview (O)</button><button data-act="notes">Notes (S)</button><button data-act="script">Script (P)</button><button data-act="fs">Fullscreen (F)</button><button data-act="help">?</button>
 </div>
 <div id="help"><div class="box">
   <h4>Keyboard</h4>
@@ -1002,6 +1169,7 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
   <div><kbd>←</kbd>previous</div>
   <div><kbd>O</kbd>overview grid (click a slide to jump)</div>
   <div><kbd>S</kbd>speaker notes + timer window</div>
+  <div><kbd>P</kbd>full speaker script (printable)</div>
   <div><kbd>F</kbd>fullscreen</div>
   <div><kbd>Home / End</kbd>first / last slide</div>
 </div></div>
