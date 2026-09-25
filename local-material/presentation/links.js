@@ -1,5 +1,6 @@
 /* Links shown on the "Get everything" slide. Fill in a url and the card gets a QR code;
-   leave it empty and the card says "link coming soon". Order here = order on the slide. */
+   leave it empty and the card says "link coming soon". Order here = order on the slide.
+   Optional `label` replaces the printed URL under the QR code (handy for long links). */
 window.DECK_LINKS = [
   {
     title: "Code",
@@ -11,12 +12,7 @@ window.DECK_LINKS = [
     title: "Model checkpoint",
     what: "the 1.5B weights you chatted with today",
     where: "EPAM SharePoint",
-    url: "",
-  },
-  {
-    title: "Tokenized data",
-    what: "Gutenberg + chat shards with manifests, ready to train",
-    where: "EPAM SharePoint",
-    url: "",
+    label: "epam-my.sharepoint.com · shared folder",
+    url: "https://epam-my.sharepoint.com/:f:/p/volodymyr_prudnikov/IgD2HNWdSqPRRLWiv8YCXrR6AQ3K-5d1UsbUPidrQKnCj_8?e=4X8cKv",
   },
 ];

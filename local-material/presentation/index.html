@@ -19,12 +19,12 @@
     <img src="assets/logo/image2.svg" alt="EPAM.AI Conference · 28 Sep – 2 Oct 2026" style="height:72px;margin-bottom:40px;display:block">
     <h1 style="font-size:190px;line-height:.9">Building an LLM<br>from scratch</h1>
     <div style="margin:38px 0 34px"><span class="pill">The real deal</span></div>
-    <p class="lead" style="max-width:980px">1.5 billion parameters, one Colab GPU, and every line written by hand. Today we train a tiny one live, and you get to chat with the big one.</p>
+    <p class="lead" style="max-width:980px">1.5 billion parameters, one Colab GPU, and a ready-to-try pipeline, from tokenizer to chat. Today we train a tiny one live, and you get to chat with the big one.</p>
     <p style="margin-top:40px;font:600 34px/1.3 var(--body);letter-spacing:.06em">Volodymyr Prudnikov&nbsp;&nbsp;<span style="opacity:.6;font-weight:400">· EPAM</span></p>
   </div>
   <aside class="notes">
     <div class="n-time">⏱ core 30 s · extended 1 min<span class="n-at">by the end of this slide: ~0 min core / ~1 min extended</span></div>
-    <p class="n-say">Hi, I'm Volodymyr. Today I'll show you how a language model like ChatGPT works on the inside, by showing you one I built myself, from an empty folder.</p>
+    <p class="n-say">Hi, I'm Volodymyr. Today I'll show you how a language model like ChatGPT works on the inside, by showing you one I built from an empty folder. And in the spirit of an AI conference: I built it together with an AI coding assistant. The ideas, the decisions and the mistakes are mine; a lot of the typing wasn't. The result is a pipeline you can clone and try yourself today.</p>
     <p class="n-say">Here's the whole idea in one sentence: <b>an LLM is a machine that plays a guessing game.</b> You show it some words, it guesses the next word. Then it adds that word and guesses again. That's all it ever does. Everything today is about how it gets good at that game.</p>
     <ul class="n-keys"><li>From scratch: no Hugging Face Transformers, no pre-trained weights</li><li>“The real deal”: real numbers, real loss curves, real (often funny) outputs</li></ul>
     <p class="n-do"><b>Do:</b> Controls: → next, ← back, O overview, F fullscreen, S this notes window.</p>
@@ -1167,14 +1167,14 @@ but the curvature of spacetime…</span><span class="k">&lt;|im_end|&gt;</span> 
 <section class="slide white" data-title="Get everything">
   <div class="inner" style="top:128px">
     <span class="eyebrow">Take it home</span>
-    <h2 style="font-size:96px;margin-bottom:12px">Get the code, the model and the data</h2>
-    <p class="lead" style="font-size:30px;margin-bottom:36px">Everything you saw today is open. Clone it, run the tests (~6 s on a CPU), and train your own tiny model on Colab.</p>
+    <h2 style="font-size:96px;margin-bottom:12px">Get the code and the model</h2>
+    <p class="lead" style="font-size:30px;margin-bottom:36px">Everything you saw today is ready to try. Clone it, run the tests (~6 s on a CPU), and train your own tiny model on Colab.</p>
     <div id="links" class="links-grid"></div>
   </div>
   <aside class="notes">
     <div class="n-time">⏱ core 30 s · extended 30 s<span class="n-at">by the end of this slide: ~43 min core / ~74 min extended</span></div>
-    <p class="n-say">Everything is open: the code, and soon the model and the data. Clone it, run the tests in a few seconds on a laptop, and train your own tiny model on Colab this weekend.</p>
-    <ul class="n-keys"><li>Links live in links.js: paste a URL and the card gets a QR code</li><li>SharePoint links need an EPAM login</li></ul>
+    <p class="n-say">Everything is ready to try: the code on GitHub and the 1.5B checkpoint on SharePoint. Clone it, run the tests in a few seconds on a laptop, and train your own tiny model on Colab this weekend.</p>
+    <ul class="n-keys"><li>Links live in links.js: paste a URL and the card gets a QR code</li><li>The model link is on EPAM SharePoint and needs an EPAM login</li></ul>
     <p class="n-do"><b>Do:</b> Leave this slide up during Q&A.</p>
   
   </aside>

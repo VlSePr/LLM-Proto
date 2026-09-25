@@ -57,7 +57,8 @@ whole script.
 2. **Live demo 2 (train the tiny model).** Run `LLM_proto.ipynb` with `MODEL_SIZE = "tiny"`, `RESUME_FROM = ""`.
    Press *Mark training start* on the live-demo slide; the check-in slide in Part 4 shows the elapsed time and
    places the current loss on a scale.
-3. **Links.** Fill the SharePoint URLs in `presentation/links.js`; empty cards show "link coming soon".
+3. **Links.** The "Get the code and the model" slide reads `presentation/links.js` (GitHub repo and the model
+   checkpoint on EPAM SharePoint). Add or edit entries there; a card with an empty URL shows "link coming soon".
 
 For rehearsal, `model3d.select(12)` and `model3d.flow()` in the browser console drive the 3D slide.
 
